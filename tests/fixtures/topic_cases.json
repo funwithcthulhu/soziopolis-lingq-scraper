@@ -1,0 +1,30 @@
+[
+  {
+    "title": "Kybernetik und Kapitalismus",
+    "subtitle": "Rezension zu digitaler Regierungskunst und Datenverarbeitung",
+    "section": "Kybernetik, Kritik, Kapitalismus, Technologie, Digitalisierung",
+    "url": "https://www.soziopolis.de/kybernetik-und-kapitalismus.html",
+    "expected": "Digitalisierung & KI"
+  },
+  {
+    "title": "Ziel erkannt, Ziel verfehlt?",
+    "subtitle": "Warum Gleichstellungsmaßnahmen fuer Frauen in der Wissenschaft stocken",
+    "section": "Frauen, Wissenschaft, Gleichstellung, Foerderung",
+    "url": "https://www.soziopolis.de/ziel-erkannt-ziel-verfehlt.html",
+    "expected": "Ungleichheit & Gesellschaft"
+  },
+  {
+    "title": "Digitale Gleichstellung",
+    "subtitle": "",
+    "section": "",
+    "url": "https://www.soziopolis.de/digitale-gleichstellung.html",
+    "expected": "Digitalisierung & KI"
+  },
+  {
+    "title": "Aufgelesen im Februar",
+    "subtitle": "Kurze Hinweise auf neue Debatten",
+    "section": "Schwerpunkt",
+    "url": "https://www.soziopolis.de/aufgelesen-im-februar.html",
+    "expected": "Allgemein / Sonstiges"
+  }
+]
