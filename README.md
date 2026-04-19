@@ -1,6 +1,6 @@
 # Soziopolis LingQ Tool
 
-A Rust-based desktop and CLI app for the same workflow as the original `taz_lingq_tool`, but aimed at `soziopolis.de`:
+A Rust-based desktop and CLI app for working with articles from `soziopolis.de`:
 
 - browse Soziopolis sections
 - extract clean full article text
@@ -140,27 +140,6 @@ To refresh the portable folders and Desktop shortcut in one step, use:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build-portable.ps1
-```
-
-## Git Setup
-
-If you want to publish this project to GitHub or another Git remote from a fresh local copy:
-
-```powershell
-git init
-git add .
-git commit -m "Initial commit"
-git branch -M main
-git remote add origin <YOUR_GIT_URL_HERE>
-git push -u origin main
-```
-
-If the repo is already initialized, you usually only need:
-
-```powershell
-git add .
-git commit -m "Update README and app improvements"
-git push
 ```
 
 ## Notes
