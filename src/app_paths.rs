@@ -46,6 +46,10 @@ pub fn support_bundles_dir() -> Result<PathBuf> {
     ensure_dir(&data_dir()?.join("support_bundles"))
 }
 
+pub fn browse_cache_dir() -> Result<PathBuf> {
+    ensure_dir(&data_dir()?.join("browse_cache"))
+}
+
 fn portable_data_dir_from_exe() -> Option<PathBuf> {
     let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
     for folder_name in ["data", "portable_data"] {

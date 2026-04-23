@@ -80,6 +80,8 @@ impl SoziopolisLingqGui {
             library_group_by_topic: true,
             library_sort_mode: LibrarySortMode::Newest,
             library_filters_expanded: true,
+            library_search_cache_query: String::new(),
+            library_search_cache_results: Vec::new(),
             article_detail: None,
             lingq_api_key,
             lingq_auth_mode: LingqAuthMode::Account,

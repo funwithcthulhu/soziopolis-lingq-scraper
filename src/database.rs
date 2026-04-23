@@ -4,10 +4,10 @@ use crate::{
     soziopolis::Article,
 };
 use anyhow::{Context, Result};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use std::{collections::HashSet, path::Path, time::Duration};
 
-const CURRENT_SCHEMA_VERSION: i32 = 5;
+const CURRENT_SCHEMA_VERSION: i32 = 6;
 
 #[derive(Debug, Clone)]
 pub struct StoredArticle {
@@ -16,6 +16,7 @@ pub struct StoredArticle {
     pub title: String,
     pub subtitle: String,
     pub teaser: String,
+    pub preview_summary: String,
     pub author: String,
     pub date: String,
     pub published_at: String,
@@ -66,17 +67,19 @@ impl Database {
     }
 
     pub fn save_article(&self, article: &Article) -> Result<i64> {
-        self.conn.execute(
+        let preview_summary = build_article_preview_summary(article);
+        let mut save_stmt = self.conn.prepare_cached(
             r#"
             INSERT INTO articles (
-                url, title, subtitle, teaser, author, date, published_at, section, source_kind, source_label,
-                body_text, clean_text, word_count, fetched_at
+                url, title, subtitle, teaser, preview_summary, author, date, published_at, section, source_kind,
+                source_label, body_text, clean_text, word_count, fetched_at
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
             ON CONFLICT(url) DO UPDATE SET
                 title = excluded.title,
                 subtitle = excluded.subtitle,
                 teaser = excluded.teaser,
+                preview_summary = excluded.preview_summary,
                 author = excluded.author,
                 date = excluded.date,
                 published_at = excluded.published_at,
@@ -88,31 +91,92 @@ impl Database {
                 word_count = excluded.word_count,
                 fetched_at = excluded.fetched_at
             "#,
-            params![
-                article.url,
-                article.title,
-                article.subtitle,
-                article.teaser,
-                article.author,
-                article.date,
-                article.published_at,
-                article.section,
-                article.source_kind,
-                article.source_label,
-                article.body_text,
-                article.clean_text,
-                article.word_count as i64,
-                article.fetched_at,
-            ],
         )?;
+        save_stmt.execute(params![
+            article.url,
+            article.title,
+            article.subtitle,
+            article.teaser,
+            preview_summary,
+            article.author,
+            article.date,
+            article.published_at,
+            article.section,
+            article.source_kind,
+            article.source_label,
+            article.body_text,
+            article.clean_text,
+            article.word_count as i64,
+            article.fetched_at,
+        ])?;
 
-        let id: i64 = self.conn.query_row(
-            "SELECT id FROM articles WHERE url = ?1",
-            params![article.url],
-            |row| row.get(0),
-        )?;
+        let mut id_stmt = self
+            .conn
+            .prepare_cached("SELECT id FROM articles WHERE url = ?1")?;
+        let id: i64 = id_stmt.query_row(params![article.url], |row| row.get(0))?;
 
         Ok(id)
+    }
+
+    pub fn save_articles_batch(&mut self, articles: &[Article]) -> Result<Vec<StoredArticle>> {
+        if articles.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let transaction = self.conn.transaction()?;
+        {
+            let mut save_stmt = transaction.prepare(
+                r#"
+                INSERT INTO articles (
+                    url, title, subtitle, teaser, preview_summary, author, date, published_at, section, source_kind,
+                    source_label, body_text, clean_text, word_count, fetched_at
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+                ON CONFLICT(url) DO UPDATE SET
+                    title = excluded.title,
+                    subtitle = excluded.subtitle,
+                    teaser = excluded.teaser,
+                    preview_summary = excluded.preview_summary,
+                    author = excluded.author,
+                    date = excluded.date,
+                    published_at = excluded.published_at,
+                    section = excluded.section,
+                    source_kind = excluded.source_kind,
+                    source_label = excluded.source_label,
+                    body_text = excluded.body_text,
+                    clean_text = excluded.clean_text,
+                    word_count = excluded.word_count,
+                    fetched_at = excluded.fetched_at
+                "#,
+            )?;
+
+            for article in articles {
+                save_stmt.execute(params![
+                    article.url,
+                    article.title,
+                    article.subtitle,
+                    article.teaser,
+                    build_article_preview_summary(article),
+                    article.author,
+                    article.date,
+                    article.published_at,
+                    article.section,
+                    article.source_kind,
+                    article.source_label,
+                    article.body_text,
+                    article.clean_text,
+                    article.word_count as i64,
+                    article.fetched_at,
+                ])?;
+            }
+        }
+        transaction.commit()?;
+
+        let urls = articles
+            .iter()
+            .map(|article| article.url.as_str())
+            .collect::<Vec<_>>();
+        self.get_articles_by_urls(&urls)
     }
 
     pub fn list_articles(
@@ -125,8 +189,9 @@ impl Database {
         let sql = if limit == 0 {
             r#"
                 SELECT
-                    id, url, title, subtitle, teaser, author, date, published_at, section, source_kind, source_label, body_text, clean_text,
-                    word_count, fetched_at, custom_topic, uploaded_to_lingq, lingq_lesson_id, lingq_lesson_url
+                    id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section, source_kind,
+                    source_label, body_text, clean_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
+                    lingq_lesson_id, lingq_lesson_url
                 FROM articles
                 WHERE (?1 IS NULL OR id IN (
                     SELECT rowid FROM articles_fts WHERE articles_fts MATCH ?1
@@ -138,8 +203,9 @@ impl Database {
         } else {
             r#"
                 SELECT
-                    id, url, title, subtitle, teaser, author, date, published_at, section, source_kind, source_label, body_text, clean_text,
-                    word_count, fetched_at, custom_topic, uploaded_to_lingq, lingq_lesson_id, lingq_lesson_url
+                    id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section, source_kind,
+                    source_label, body_text, clean_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
+                    lingq_lesson_id, lingq_lesson_url
                 FROM articles
                 WHERE (?1 IS NULL OR id IN (
                     SELECT rowid FROM articles_fts WHERE articles_fts MATCH ?1
@@ -175,19 +241,68 @@ impl Database {
     }
 
     pub fn get_article(&self, id: i64) -> Result<Option<StoredArticle>> {
-        self.conn
-            .query_row(
-                r#"
+        let mut stmt = self.conn.prepare_cached(
+            r#"
                 SELECT
-                    id, url, title, subtitle, teaser, author, date, published_at, section, source_kind, source_label, body_text, clean_text,
-                    word_count, fetched_at, custom_topic, uploaded_to_lingq, lingq_lesson_id, lingq_lesson_url
+                    id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section, source_kind,
+                    source_label, body_text, clean_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
+                    lingq_lesson_id, lingq_lesson_url
                 FROM articles
                 WHERE id = ?1
                 "#,
-                params![id],
-                map_article_row,
-            )
+        )?;
+        stmt.query_row(params![id], map_article_row)
             .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn get_articles_by_ids(&self, ids: &[i64]) -> Result<Vec<StoredArticle>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let placeholders = std::iter::repeat_n("?", ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            r#"
+            SELECT
+                id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section, source_kind,
+                source_label, body_text, clean_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
+                lingq_lesson_id, lingq_lesson_url
+            FROM articles
+            WHERE id IN ({placeholders})
+            "#
+        );
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(ids.iter()), map_article_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn get_articles_by_urls(&self, urls: &[&str]) -> Result<Vec<StoredArticle>> {
+        if urls.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let placeholders = std::iter::repeat_n("?", urls.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            r#"
+            SELECT
+                id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section, source_kind,
+                source_label, body_text, clean_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
+                lingq_lesson_id, lingq_lesson_url
+            FROM articles
+            WHERE url IN ({placeholders})
+            "#
+        );
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(urls.iter()), map_article_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
     }
 
@@ -210,10 +325,10 @@ impl Database {
     }
 
     pub fn mark_uploaded(&self, id: i64, lesson_id: i64, lesson_url: &str) -> Result<()> {
-        self.conn.execute(
+        let mut stmt = self.conn.prepare_cached(
             "UPDATE articles SET uploaded_to_lingq = 1, lingq_lesson_id = ?1, lingq_lesson_url = ?2 WHERE id = ?3",
-            params![lesson_id, lesson_url, id],
         )?;
+        stmt.execute(params![lesson_id, lesson_url, id])?;
         Ok(())
     }
 
@@ -410,6 +525,7 @@ impl Database {
             PRAGMA synchronous = NORMAL;
             PRAGMA foreign_keys = ON;
             PRAGMA temp_store = MEMORY;
+            PRAGMA cache_size = -20000;
             "#,
         )?;
         Ok(())
@@ -441,12 +557,19 @@ impl Database {
         } else {
             self.migrate_to_v4()?;
         }
-        if version < CURRENT_SCHEMA_VERSION {
+        if version < 5 {
             self.migrate_to_v5()?;
-            version = CURRENT_SCHEMA_VERSION;
+            version = 5;
             self.set_user_version(version)?;
         } else {
             self.migrate_to_v5()?;
+        }
+        if version < CURRENT_SCHEMA_VERSION {
+            needs_fts_rebuild |= self.migrate_to_v6()?;
+            version = CURRENT_SCHEMA_VERSION;
+            self.set_user_version(version)?;
+        } else {
+            needs_fts_rebuild |= self.migrate_to_v6()?;
         }
 
         self.rebuild_fts_if_needed(needs_fts_rebuild)?;
@@ -572,6 +695,10 @@ impl Database {
         Ok(())
     }
 
+    fn migrate_to_v6(&self) -> Result<bool> {
+        self.add_column_if_missing("articles", "preview_summary", "TEXT NOT NULL DEFAULT ''")
+    }
+
     fn rebuild_fts_if_needed(&self, force_rebuild: bool) -> Result<()> {
         if !self.table_exists("articles_fts")? {
             return Ok(());
@@ -673,21 +800,63 @@ fn map_article_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredArticle> {
         title: row.get(2)?,
         subtitle: row.get(3)?,
         teaser: row.get(4)?,
-        author: row.get(5)?,
-        date: row.get(6)?,
-        published_at: row.get(7)?,
-        section: row.get(8)?,
-        source_kind: row.get(9)?,
-        source_label: row.get(10)?,
-        body_text: row.get(11)?,
-        clean_text: row.get(12)?,
-        word_count: row.get(13)?,
-        fetched_at: row.get(14)?,
-        custom_topic: row.get(15)?,
-        uploaded_to_lingq: row.get::<_, i64>(16)? != 0,
-        lingq_lesson_id: row.get(17)?,
-        lingq_lesson_url: row.get(18)?,
+        preview_summary: row.get(5)?,
+        author: row.get(6)?,
+        date: row.get(7)?,
+        published_at: row.get(8)?,
+        section: row.get(9)?,
+        source_kind: row.get(10)?,
+        source_label: row.get(11)?,
+        body_text: row.get(12)?,
+        clean_text: row.get(13)?,
+        word_count: row.get(14)?,
+        fetched_at: row.get(15)?,
+        custom_topic: row.get(16)?,
+        uploaded_to_lingq: row.get::<_, i64>(17)? != 0,
+        lingq_lesson_id: row.get(18)?,
+        lingq_lesson_url: row.get(19)?,
     })
+}
+
+fn build_article_preview_summary(article: &Article) -> String {
+    for candidate in [
+        article.teaser.as_str(),
+        article.subtitle.as_str(),
+        article.body_text.as_str(),
+    ] {
+        let preview = normalize_preview_text(candidate, 220);
+        if !preview.is_empty() {
+            return preview;
+        }
+    }
+
+    String::new()
+}
+
+fn normalize_preview_text(value: &str, max_chars: usize) -> String {
+    let collapsed = value
+        .trim()
+        .strip_prefix("## ")
+        .unwrap_or(value.trim())
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let collapsed = collapsed.trim();
+    if collapsed.is_empty() {
+        return String::new();
+    }
+
+    if collapsed.chars().count() <= max_chars {
+        collapsed.to_owned()
+    } else {
+        format!(
+            "{}...",
+            collapsed
+                .chars()
+                .take(max_chars.saturating_sub(3))
+                .collect::<String>()
+        )
+    }
 }
 
 fn build_fts_query(search: Option<&str>) -> Option<String> {

@@ -363,6 +363,7 @@ impl SoziopolisLingqGui {
                     Ok(result) => AppEvent::BatchFetched {
                         job_id,
                         saved_count: result.saved_count,
+                        saved_articles: result.saved_articles,
                         skipped_existing: result.skipped_existing,
                         skipped_out_of_range: result.skipped_out_of_range,
                         failed: result.failed,
@@ -371,6 +372,7 @@ impl SoziopolisLingqGui {
                     Err(err) => AppEvent::BatchFetched {
                         job_id,
                         saved_count: 0,
+                        saved_articles: Vec::new(),
                         skipped_existing: 0,
                         skipped_out_of_range: 0,
                         failed: vec![FailedFetchItem {
@@ -393,6 +395,7 @@ impl SoziopolisLingqGui {
                     AppEvent::BatchFetched {
                         job_id,
                         saved_count: 0,
+                        saved_articles: Vec::new(),
                         skipped_existing: 0,
                         skipped_out_of_range: 0,
                         failed: vec![FailedFetchItem {
@@ -436,12 +439,14 @@ impl SoziopolisLingqGui {
                     Ok(result) => AppEvent::BatchUploaded {
                         job_id,
                         uploaded: result.uploaded,
+                        successes: result.successes,
                         failed: result.failed,
                         canceled: result.canceled,
                     },
                     Err(err) => AppEvent::BatchUploaded {
                         job_id,
                         uploaded: 0,
+                        successes: Vec::new(),
                         failed: vec![UploadFailure {
                             article_id: 0,
                             title: "Upload job".to_owned(),
@@ -461,6 +466,7 @@ impl SoziopolisLingqGui {
                     AppEvent::BatchUploaded {
                         job_id,
                         uploaded: 0,
+                        successes: Vec::new(),
                         failed: vec![UploadFailure {
                             article_id: 0,
                             title: "Upload job".to_owned(),

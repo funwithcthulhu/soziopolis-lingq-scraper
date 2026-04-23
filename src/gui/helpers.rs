@@ -67,6 +67,77 @@ impl SoziopolisLingqGui {
         }
     }
 
+    pub(super) fn invalidate_library_search_cache(&mut self) {
+        self.library_search_cache_query.clear();
+        self.library_search_cache_results.clear();
+    }
+
+    pub(super) fn refresh_local_library_stats(&mut self) {
+        self.library_stats = Some(compute_local_library_stats(&self.library_articles));
+    }
+
+    pub(super) fn apply_imported_articles(&mut self, mut saved_articles: Vec<StoredArticle>) {
+        if saved_articles.is_empty() {
+            self.invalidate_library_search_cache();
+            return;
+        }
+
+        for article in &saved_articles {
+            self.browse_imported_urls.insert(article.url.clone());
+        }
+
+        self.library_articles
+            .retain(|existing| !saved_articles.iter().any(|saved| saved.id == existing.id));
+        self.library_articles.append(&mut saved_articles);
+        self.invalidate_library_search_cache();
+        self.refresh_local_library_stats();
+    }
+
+    pub(super) fn apply_uploaded_articles(&mut self, successes: &[UploadSuccess]) {
+        if successes.is_empty() {
+            return;
+        }
+
+        for success in successes {
+            if let Some(article) = self
+                .library_articles
+                .iter_mut()
+                .find(|article| article.id == success.article_id)
+            {
+                article.uploaded_to_lingq = true;
+                article.lingq_lesson_id = Some(success.lesson_id);
+                article.lingq_lesson_url = success.lesson_url.clone();
+            }
+        }
+        self.invalidate_library_search_cache();
+        self.refresh_local_library_stats();
+    }
+
+    pub(super) fn remove_article_from_local_state(&mut self, article_id: i64) {
+        let removed_urls = self
+            .library_articles
+            .iter()
+            .filter(|article| article.id == article_id)
+            .map(|article| article.url.clone())
+            .collect::<Vec<_>>();
+        self.library_articles
+            .retain(|article| article.id != article_id);
+        for url in removed_urls {
+            self.browse_imported_urls.remove(&url);
+        }
+        self.lingq_selected_articles.remove(&article_id);
+        self.article_detail = self
+            .article_detail
+            .take()
+            .filter(|article| article.id != article_id);
+        self.preview_stored_article = self
+            .preview_stored_article
+            .take()
+            .filter(|article| article.id != article_id);
+        self.invalidate_library_search_cache();
+        self.refresh_local_library_stats();
+    }
+
     pub(super) fn browse_article_passes_new_filter(&self, article: &ArticleSummary) -> bool {
         !self.browse_imported_urls.contains(&article.url)
     }
@@ -92,7 +163,7 @@ impl SoziopolisLingqGui {
         passes_new && passes_search
     }
 
-    pub(super) fn filtered_library_articles(&self) -> Result<Vec<StoredArticle>, String> {
+    pub(super) fn filtered_library_articles(&mut self) -> Result<Vec<StoredArticle>, String> {
         let min_words = parse_optional_positive_usize_input(
             &self.library_word_count_min,
             "Library minimum words",
@@ -110,14 +181,19 @@ impl SoziopolisLingqGui {
             }
         }
 
-        let mut articles = if self.library_search.trim().is_empty() {
+        let trimmed_search = self.library_search.trim();
+        let mut articles = if trimmed_search.is_empty() {
             self.library_articles.clone()
         } else {
-            let database = Database::open_default().map_err(|err| err.to_string())?;
-            let repository = ArticleRepository::new(&database);
-            repository
-                .list_articles(Some(&self.library_search), None, false, 0)
-                .map_err(|err| err.to_string())?
+            if self.library_search_cache_query != trimmed_search {
+                let database = Database::open_default().map_err(|err| err.to_string())?;
+                let repository = ArticleRepository::new(&database);
+                self.library_search_cache_results = repository
+                    .list_articles(Some(trimmed_search), None, false, 0)
+                    .map_err(|err| err.to_string())?;
+                self.library_search_cache_query = trimmed_search.to_owned();
+            }
+            self.library_search_cache_results.clone()
         };
 
         articles = articles
@@ -196,8 +272,8 @@ pub(super) fn render_library_article_card(
                 if ui.button("Delete").clicked() {
                     match LibraryService::delete_article(article.id) {
                         Ok(_) => {
+                            app.remove_article_from_local_state(article.id);
                             app.set_notice("Article deleted.", NoticeKind::Info);
-                            app.refresh_after_content_change("article delete");
                         }
                         Err(err) => app.set_notice(err.to_string(), NoticeKind::Error),
                     }
@@ -280,6 +356,10 @@ pub(super) fn effective_topic_for_article(article: &StoredArticle) -> String {
 }
 
 pub(super) fn library_card_preview_line(article: &StoredArticle) -> String {
+    if !article.preview_summary.trim().is_empty() {
+        return truncate_for_ui(article.preview_summary.trim(), 160);
+    }
+
     if !article.teaser.trim().is_empty() {
         return truncate_for_ui(article.teaser.trim(), 160);
     }
@@ -342,6 +422,50 @@ pub(super) fn stored_article_to_preview_article(article: &StoredArticle) -> Arti
         clean_text: article.clean_text.clone(),
         word_count: article.word_count as usize,
         fetched_at: article.fetched_at.clone(),
+    }
+}
+
+pub(super) fn compute_local_library_stats(articles: &[StoredArticle]) -> LibraryStats {
+    let total_articles = articles.len() as i64;
+    let uploaded_articles = articles
+        .iter()
+        .filter(|article| article.uploaded_to_lingq)
+        .count() as i64;
+    let total_words = articles
+        .iter()
+        .map(|article| article.word_count)
+        .sum::<i64>();
+    let average_word_count = if total_articles == 0 {
+        0
+    } else {
+        (total_words as f64 / total_articles as f64).round() as i64
+    };
+
+    let mut section_counts = BTreeMap::new();
+    for article in articles {
+        let section = if article.section.trim().is_empty() {
+            "Unsorted".to_owned()
+        } else {
+            article.section.clone()
+        };
+        *section_counts.entry(section).or_insert(0i64) += 1;
+    }
+
+    let mut sections = section_counts
+        .into_iter()
+        .map(|(section, count)| SectionCount { section, count })
+        .collect::<Vec<_>>();
+    sections.sort_by(|a, b| {
+        b.count
+            .cmp(&a.count)
+            .then_with(|| a.section.cmp(&b.section))
+    });
+
+    LibraryStats {
+        total_articles,
+        uploaded_articles,
+        average_word_count,
+        sections,
     }
 }
 

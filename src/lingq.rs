@@ -1,9 +1,12 @@
 use anyhow::{Context, Result, anyhow, bail};
 use reqwest::blocking::Client;
 use serde::{Deserialize, de::DeserializeOwned};
+use std::time::Duration;
 
 const LINGQ_BASE: &str = "https://www.lingq.com/api/v3";
 const LINGQ_AUTH: &str = "https://www.lingq.com/api/v2/api-token-auth/";
+const LINGQ_TIMEOUT: Duration = Duration::from_secs(20);
+const LINGQ_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 pub struct Collection {
@@ -67,6 +70,8 @@ impl LingqClient {
     pub fn new() -> Result<Self> {
         let client = Client::builder()
             .user_agent("soziopolis_lingq_tool/0.1.0")
+            .connect_timeout(LINGQ_CONNECT_TIMEOUT)
+            .timeout(LINGQ_TIMEOUT)
             .build()
             .context("failed to build LingQ HTTP client")?;
 

@@ -45,6 +45,13 @@ pub struct UploadFailure {
 }
 
 #[derive(Debug, Clone)]
+pub struct UploadSuccess {
+    pub article_id: i64,
+    pub lesson_id: i64,
+    pub lesson_url: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct UploadProgress {
     pub processed: usize,
     pub total: usize,

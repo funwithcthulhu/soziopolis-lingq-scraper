@@ -1,10 +1,10 @@
 use crate::{
     app_paths, credential_store,
     database::Database,
-    database::{LibraryStats, StoredArticle},
+    database::{LibraryStats, SectionCount, StoredArticle},
     jobs::{
         CompletedJob, FailedFetchItem, ImportProgress, JobKind, QueueSnapshot, QueuedJob,
-        QueuedJobRequest, UploadFailure, UploadProgress,
+        QueuedJobRequest, UploadFailure, UploadProgress, UploadSuccess,
     },
     lingq::Collection,
     logging,

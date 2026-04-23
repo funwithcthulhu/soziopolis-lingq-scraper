@@ -1,6 +1,6 @@
 use crate::{
     database::Database,
-    jobs::{FailedFetchItem, ImportProgress, UploadFailure, UploadProgress},
+    jobs::{FailedFetchItem, ImportProgress, UploadFailure, UploadProgress, UploadSuccess},
     lingq::{Collection, LingqClient, UploadRequest},
     repositories::ArticleRepository,
     soziopolis::{
@@ -10,15 +10,17 @@ use crate::{
 };
 use anyhow::{Result, anyhow};
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     sync::mpsc,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
+    time::Instant,
 };
 
 const MAX_IMPORT_WORKERS: usize = 4;
+const MAX_UPLOAD_WORKERS: usize = 2;
 
 pub struct ContentRefreshResult {
     pub imported_urls: Result<HashSet<String>, String>,
@@ -28,6 +30,7 @@ pub struct ContentRefreshResult {
 
 pub struct ImportOutcome {
     pub saved_count: usize,
+    pub saved_articles: Vec<crate::database::StoredArticle>,
     pub skipped_existing: usize,
     pub skipped_out_of_range: usize,
     pub failed: Vec<FailedFetchItem>,
@@ -36,6 +39,7 @@ pub struct ImportOutcome {
 
 pub struct UploadOutcome {
     pub uploaded: usize,
+    pub successes: Vec<UploadSuccess>,
     pub failed: Vec<UploadFailure>,
     pub canceled: bool,
 }
@@ -57,12 +61,19 @@ pub struct BrowseService;
 
 impl BrowseService {
     pub fn browse_section(section_id: &str, limit: usize) -> Result<BrowseResponse> {
+        let started = Instant::now();
         let scraper = SoziopolisClient::new()?;
         let section = scraper
             .section_by_id(section_id)
             .ok_or_else(|| anyhow!("unknown section '{section_id}'"))?;
         let mut state = scraper.start_section_browse(section)?;
         scraper.grow_section_browse(&mut state, limit)?;
+        crate::logging::info(format!(
+            "browse_section '{}' loaded {} article(s) in {:?}",
+            section_id,
+            state.articles.len(),
+            started.elapsed()
+        ));
         Ok(BrowseResponse {
             articles: state.articles.clone(),
             report: state.report.clone(),
@@ -75,8 +86,14 @@ impl BrowseService {
         mut state: SectionBrowseState,
         limit: usize,
     ) -> Result<BrowseResponse> {
+        let started = Instant::now();
         let scraper = SoziopolisClient::new()?;
         scraper.grow_section_browse(&mut state, limit)?;
+        crate::logging::info(format!(
+            "continue_browse_section now has {} article(s) in {:?}",
+            state.articles.len(),
+            started.elapsed()
+        ));
         Ok(BrowseResponse {
             articles: state.articles.clone(),
             report: state.report.clone(),
@@ -86,9 +103,15 @@ impl BrowseService {
     }
 
     pub fn browse_all_sections(limit: usize) -> Result<BrowseResponse> {
+        let started = Instant::now();
         let scraper = SoziopolisClient::new()?;
         let mut state = scraper.start_all_sections_browse()?;
         let result: BrowseSectionResult = scraper.grow_all_sections_browse(&mut state, limit)?;
+        crate::logging::info(format!(
+            "browse_all_sections loaded {} article(s) in {:?}",
+            result.articles.len(),
+            started.elapsed()
+        ));
         Ok(BrowseResponse {
             articles: result.articles,
             report: result.report,
@@ -101,8 +124,14 @@ impl BrowseService {
         mut state: AllSectionsBrowseState,
         limit: usize,
     ) -> Result<BrowseResponse> {
+        let started = Instant::now();
         let scraper = SoziopolisClient::new()?;
         let result = scraper.grow_all_sections_browse(&mut state, limit)?;
+        crate::logging::info(format!(
+            "continue_browse_all_sections now has {} article(s) in {:?}",
+            result.articles.len(),
+            started.elapsed()
+        ));
         Ok(BrowseResponse {
             articles: result.articles,
             report: result.report,
@@ -120,9 +149,11 @@ impl BrowseService {
         cancel_flag: Arc<AtomicBool>,
         mut on_progress: impl FnMut(ImportProgress),
     ) -> Result<ImportOutcome> {
-        let db = Database::open_default()?;
+        let started = Instant::now();
+        let mut db = Database::open_default()?;
         let repository = ArticleRepository::new(&db);
         let mut saved_count = 0usize;
+        let mut saved_articles = Vec::new();
         let mut skipped_existing = 0usize;
         let mut failed = Vec::new();
         let total = articles.len();
@@ -130,6 +161,7 @@ impl BrowseService {
         let mut known_urls = repository.get_all_article_urls()?;
         let mut processed = 0usize;
         let mut pending = Vec::new();
+        let mut fetched_articles = Vec::new();
 
         for summary in articles {
             let current_item = if summary.title.is_empty() {
@@ -142,7 +174,7 @@ impl BrowseService {
                 skipped_existing += 1;
                 processed += 1;
                 on_progress(ImportProgress {
-                    phase: "Importing selected articles".to_owned(),
+                    phase: "Scanning selected articles".to_owned(),
                     processed,
                     total: Some(total),
                     saved_count,
@@ -175,19 +207,7 @@ impl BrowseService {
             while let Ok(result) = result_rx.recv() {
                 processed += 1;
                 match result.outcome {
-                    Ok(article) => {
-                        if let Err(err) = repository.save_article(&article) {
-                            failed.push(FailedFetchItem {
-                                url: result.summary.url.clone(),
-                                title: article.title.clone(),
-                                category: "database".to_owned(),
-                                message: err.to_string(),
-                            });
-                        } else {
-                            saved_count += 1;
-                            known_urls.insert(result.summary.url.clone());
-                        }
-                    }
+                    Ok(article) => fetched_articles.push(article),
                     Err(message) => failed.push(FailedFetchItem {
                         url: result.summary.url.clone(),
                         title: result.summary.title.clone(),
@@ -197,7 +217,7 @@ impl BrowseService {
                 }
 
                 on_progress(ImportProgress {
-                    phase: "Importing selected articles".to_owned(),
+                    phase: "Fetching selected articles".to_owned(),
                     processed,
                     total: Some(total),
                     saved_count,
@@ -213,12 +233,110 @@ impl BrowseService {
             canceled = true;
         }
 
+        if !fetched_articles.is_empty() {
+            let save_total = fetched_articles.len();
+            on_progress(ImportProgress {
+                phase: "Saving imported articles".to_owned(),
+                processed: 0,
+                total: Some(save_total),
+                saved_count,
+                skipped_existing,
+                skipped_out_of_range: 0,
+                failed_count: failed.len(),
+                current_item: "Writing articles to the local library".to_owned(),
+            });
+
+            match db.save_articles_batch(&fetched_articles) {
+                Ok(mut stored_articles) => {
+                    saved_count += stored_articles.len();
+                    for article in &stored_articles {
+                        known_urls.insert(article.url.clone());
+                    }
+                    saved_articles.append(&mut stored_articles);
+                }
+                Err(batch_err) => {
+                    crate::logging::warn(format!(
+                        "batch import save failed; retrying individual article writes: {batch_err}"
+                    ));
+                    for article in fetched_articles {
+                        match db.save_article(&article) {
+                            Ok(_) => match db.get_article_id_by_url(&article.url) {
+                                Ok(Some(id)) => match db.get_article(id) {
+                                    Ok(Some(stored)) => {
+                                        saved_count += 1;
+                                        known_urls.insert(stored.url.clone());
+                                        saved_articles.push(stored);
+                                    }
+                                    Ok(None) => failed.push(FailedFetchItem {
+                                        url: article.url.clone(),
+                                        title: article.title.clone(),
+                                        category: "database".to_owned(),
+                                        message:
+                                            "Article saved but could not be reloaded from the local library."
+                                                .to_owned(),
+                                    }),
+                                    Err(err) => failed.push(FailedFetchItem {
+                                        url: article.url.clone(),
+                                        title: article.title.clone(),
+                                        category: "database".to_owned(),
+                                        message: err.to_string(),
+                                    }),
+                                },
+                                Ok(None) => failed.push(FailedFetchItem {
+                                    url: article.url.clone(),
+                                    title: article.title.clone(),
+                                    category: "database".to_owned(),
+                                    message:
+                                        "Article saved but no local article id was returned."
+                                            .to_owned(),
+                                }),
+                                Err(err) => failed.push(FailedFetchItem {
+                                    url: article.url.clone(),
+                                    title: article.title.clone(),
+                                    category: "database".to_owned(),
+                                    message: err.to_string(),
+                                }),
+                            },
+                            Err(err) => failed.push(FailedFetchItem {
+                                url: article.url.clone(),
+                                title: article.title.clone(),
+                                category: "database".to_owned(),
+                                message: err.to_string(),
+                            }),
+                        }
+                    }
+                }
+            }
+
+            on_progress(ImportProgress {
+                phase: "Saving imported articles".to_owned(),
+                processed: save_total,
+                total: Some(save_total),
+                saved_count,
+                skipped_existing,
+                skipped_out_of_range: 0,
+                failed_count: failed.len(),
+                current_item: "Local library updated".to_owned(),
+            });
+        }
+
         Ok(ImportOutcome {
             saved_count,
+            saved_articles,
             skipped_existing,
             skipped_out_of_range: 0,
             failed,
             canceled,
+        })
+        .inspect(|outcome| {
+            crate::logging::info(format!(
+                "import_articles processed {} input item(s): saved {}, skipped {}, failed {} in {:?}",
+                total,
+                outcome.saved_count,
+                outcome.skipped_existing,
+                outcome.failed.len(),
+                started.elapsed()
+            ));
         })
     }
 }
@@ -227,6 +345,12 @@ struct ImportFetchResult {
     summary: ArticleSummary,
     current_item: String,
     outcome: Result<Article, String>,
+}
+
+struct UploadArticleResult {
+    article: crate::database::StoredArticle,
+    current_item: String,
+    outcome: Result<crate::lingq::UploadResponse, String>,
 }
 
 fn worker_fetch_articles(
@@ -323,9 +447,83 @@ fn import_worker_count(pending_items: usize) -> usize {
     pending_items.clamp(1, MAX_IMPORT_WORKERS)
 }
 
+fn upload_worker_count(pending_items: usize) -> usize {
+    pending_items.clamp(1, MAX_UPLOAD_WORKERS)
+}
+
+fn worker_upload_articles(
+    queue: Arc<Mutex<VecDeque<crate::database::StoredArticle>>>,
+    result_tx: mpsc::Sender<UploadArticleResult>,
+    cancel_flag: Arc<AtomicBool>,
+    api_key: String,
+    collection_id: Option<i64>,
+    worker_index: usize,
+) {
+    let lingq = match LingqClient::new() {
+        Ok(client) => client,
+        Err(err) => {
+            let message = err.to_string();
+            loop {
+                if cancel_flag.load(Ordering::Relaxed) {
+                    break;
+                }
+                let next_article = {
+                    let mut queue = queue.lock().expect("upload queue mutex poisoned");
+                    queue.pop_front()
+                };
+                let Some(article) = next_article else {
+                    break;
+                };
+                let _ = result_tx.send(UploadArticleResult {
+                    current_item: article.title.clone(),
+                    article,
+                    outcome: Err(message.clone()),
+                });
+            }
+            return;
+        }
+    };
+
+    if worker_index > 0 {
+        std::thread::sleep(std::time::Duration::from_millis(175 * worker_index as u64));
+    }
+
+    loop {
+        if cancel_flag.load(Ordering::Relaxed) {
+            break;
+        }
+
+        let next_article = {
+            let mut queue = queue.lock().expect("upload queue mutex poisoned");
+            queue.pop_front()
+        };
+        let Some(article) = next_article else {
+            break;
+        };
+
+        let current_item = article.title.clone();
+        let outcome = lingq
+            .upload_lesson(&UploadRequest {
+                api_key: api_key.clone(),
+                language_code: "de".to_owned(),
+                collection_id,
+                title: article.title.clone(),
+                text: article.clean_text.clone(),
+                original_url: Some(article.url.clone()),
+            })
+            .map_err(|err| err.to_string());
+
+        let _ = result_tx.send(UploadArticleResult {
+            article,
+            current_item,
+            outcome,
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::import_worker_count;
+    use super::{import_worker_count, upload_worker_count};
 
     #[test]
     fn import_worker_count_is_bounded() {
@@ -334,12 +532,21 @@ mod tests {
         assert_eq!(import_worker_count(3), 3);
         assert_eq!(import_worker_count(20), 4);
     }
+
+    #[test]
+    fn upload_worker_count_is_bounded() {
+        assert_eq!(upload_worker_count(0), 1);
+        assert_eq!(upload_worker_count(1), 1);
+        assert_eq!(upload_worker_count(2), 2);
+        assert_eq!(upload_worker_count(12), 2);
+    }
 }
 
 pub struct LibraryService;
 
 impl LibraryService {
     pub fn refresh_content() -> ContentRefreshResult {
+        let started = Instant::now();
         let db = match Database::open_default() {
             Ok(db) => db,
             Err(err) => {
@@ -352,7 +559,7 @@ impl LibraryService {
             }
         };
         let repository = ArticleRepository::new(&db);
-        ContentRefreshResult {
+        let result = ContentRefreshResult {
             imported_urls: repository
                 .get_all_article_urls()
                 .map_err(|err| err.to_string()),
@@ -360,7 +567,12 @@ impl LibraryService {
                 .list_articles(None, None, false, 0)
                 .map_err(|err| err.to_string()),
             library_stats: repository.get_stats().map_err(|err| err.to_string()),
-        }
+        };
+        crate::logging::info(format!(
+            "refresh_content completed in {:?}",
+            started.elapsed()
+        ));
+        result
     }
 
     pub fn delete_article(id: i64) -> Result<()> {
@@ -394,68 +606,128 @@ impl LingqService {
         cancel_flag: Arc<AtomicBool>,
         mut on_progress: impl FnMut(UploadProgress),
     ) -> Result<UploadOutcome> {
+        let started = Instant::now();
         let db = Database::open_default()?;
         let repository = ArticleRepository::new(&db);
-        let lingq = LingqClient::new()?;
         let mut uploaded = 0usize;
+        let mut successes = Vec::new();
         let mut failed = Vec::new();
         let total = ids.len();
         let mut canceled = false;
+        let ordered_ids = ids;
+        let article_map = repository
+            .get_articles_by_ids(&ordered_ids)?
+            .into_iter()
+            .map(|article| (article.id, article))
+            .collect::<HashMap<_, _>>();
+        let mut queue = VecDeque::new();
 
-        for (index, id) in ids.into_iter().enumerate() {
-            if cancel_flag.load(Ordering::Relaxed) {
-                canceled = true;
-                break;
-            }
-
-            let Some(article) = repository.get_article(id)? else {
+        for id in ordered_ids {
+            if let Some(article) = article_map.get(&id) {
+                queue.push_back(article.clone());
+            } else {
                 failed.push(UploadFailure {
                     article_id: id,
                     title: format!("Article #{id}"),
                     message: "Article not found in the local library.".to_owned(),
                 });
-                continue;
-            };
-
-            let current_item = article.title.clone();
-            let upload = lingq.upload_lesson(&UploadRequest {
-                api_key: api_key.clone(),
-                language_code: "de".to_owned(),
-                collection_id,
-                title: article.title.clone(),
-                text: article.clean_text.clone(),
-                original_url: Some(article.url.clone()),
-            });
-
-            match upload {
-                Ok(response) => {
-                    repository.mark_uploaded(
-                        article.id,
-                        response.lesson_id,
-                        &response.lesson_url,
-                    )?;
-                    uploaded += 1;
-                }
-                Err(err) => failed.push(UploadFailure {
-                    article_id: article.id,
-                    title: article.title.clone(),
-                    message: err.to_string(),
-                }),
             }
+        }
 
+        let initial_processed = failed.len();
+        if initial_processed > 0 {
             on_progress(UploadProgress {
-                processed: index + 1,
+                processed: initial_processed,
                 total,
                 uploaded,
                 failed_count: failed.len(),
-                current_item,
+                current_item: "Preparing LingQ upload queue".to_owned(),
             });
+        }
+
+        let worker_count = upload_worker_count(queue.len());
+        let queue = Arc::new(Mutex::new(queue));
+        let (result_tx, result_rx) = mpsc::channel();
+
+        std::thread::scope(|scope| {
+            for worker_index in 0..worker_count {
+                let queue = Arc::clone(&queue);
+                let result_tx = result_tx.clone();
+                let cancel_flag = Arc::clone(&cancel_flag);
+                let api_key = api_key.clone();
+                scope.spawn(move || {
+                    worker_upload_articles(
+                        queue,
+                        result_tx,
+                        cancel_flag,
+                        api_key,
+                        collection_id,
+                        worker_index,
+                    );
+                });
+            }
+            drop(result_tx);
+
+            let mut processed = initial_processed;
+            while let Ok(result) = result_rx.recv() {
+                processed += 1;
+                match result.outcome {
+                    Ok(response) => {
+                        match repository.mark_uploaded(
+                            result.article.id,
+                            response.lesson_id,
+                            &response.lesson_url,
+                        ) {
+                            Ok(()) => {
+                                uploaded += 1;
+                                successes.push(UploadSuccess {
+                                    article_id: result.article.id,
+                                    lesson_id: response.lesson_id,
+                                    lesson_url: response.lesson_url,
+                                });
+                            }
+                            Err(err) => failed.push(UploadFailure {
+                                article_id: result.article.id,
+                                title: result.article.title.clone(),
+                                message: err.to_string(),
+                            }),
+                        }
+                    }
+                    Err(message) => failed.push(UploadFailure {
+                        article_id: result.article.id,
+                        title: result.article.title.clone(),
+                        message,
+                    }),
+                }
+
+                on_progress(UploadProgress {
+                    processed,
+                    total,
+                    uploaded,
+                    failed_count: failed.len(),
+                    current_item: result.current_item,
+                });
+            }
+        });
+
+        if cancel_flag.load(Ordering::Relaxed) {
+            canceled = true;
         }
 
         Ok(UploadOutcome {
             uploaded,
+            successes,
             failed,
             canceled,
+        })
+        .inspect(|outcome| {
+            crate::logging::info(format!(
+                "upload_articles processed {} item(s): uploaded {}, failed {} in {:?}",
+                total,
+                outcome.uploaded,
+                outcome.failed.len(),
+                started.elapsed()
+            ));
         })
     }
 }

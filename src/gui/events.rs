@@ -30,6 +30,7 @@ impl SoziopolisLingqGui {
         &mut self,
         job_id: u64,
         saved_count: usize,
+        saved_articles: Vec<StoredArticle>,
         skipped_existing: usize,
         skipped_out_of_range: usize,
         failed: Vec<FailedFetchItem>,
@@ -43,7 +44,7 @@ impl SoziopolisLingqGui {
         self.batch_fetching = false;
         self.import_progress = None;
         self.failed_fetches = failed.clone();
-        self.refresh_after_content_change("batch import");
+        self.apply_imported_articles(saved_articles);
         self.record_completed_job(
             job_id,
             JobKind::Import,
@@ -131,6 +132,8 @@ impl SoziopolisLingqGui {
                     articles.len()
                 ));
                 self.library_articles = articles;
+                self.library_search_cache_query.clear();
+                self.library_search_cache_results.clear();
             }
             Err(err) => failures.push(format!("library articles: {err}")),
         }
@@ -210,6 +213,7 @@ impl SoziopolisLingqGui {
         &mut self,
         job_id: u64,
         uploaded: usize,
+        successes: Vec<UploadSuccess>,
         failed: Vec<UploadFailure>,
         canceled: bool,
     ) {
@@ -220,7 +224,7 @@ impl SoziopolisLingqGui {
             .unwrap_or_else(|| "Upload job".to_owned());
         self.lingq_uploading = false;
         self.upload_progress = None;
-        self.refresh_after_content_change("LingQ batch upload");
+        self.apply_uploaded_articles(&successes);
         self.lingq_selected_articles.clear();
         self.last_failed_uploads = failed.clone();
         self.record_completed_job(
@@ -316,6 +320,7 @@ impl SoziopolisLingqGui {
                 AppEvent::BatchFetched {
                     job_id,
                     saved_count,
+                    saved_articles,
                     skipped_existing,
                     skipped_out_of_range,
                     failed,
@@ -323,6 +328,7 @@ impl SoziopolisLingqGui {
                 } => self.handle_batch_fetched(
                     job_id,
                     saved_count,
+                    saved_articles,
                     skipped_existing,
                     skipped_out_of_range,
                     failed,
@@ -338,9 +344,10 @@ impl SoziopolisLingqGui {
                 AppEvent::BatchUploaded {
                     job_id,
                     uploaded,
+                    successes,
                     failed,
                     canceled,
-                } => self.handle_batch_uploaded(job_id, uploaded, failed, canceled),
+                } => self.handle_batch_uploaded(job_id, uploaded, successes, failed, canceled),
             }
         }
 

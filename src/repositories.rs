@@ -34,6 +34,14 @@ impl<'a> ArticleRepository<'a> {
         self.db.get_article(id)
     }
 
+    pub fn get_articles_by_ids(&self, ids: &[i64]) -> Result<Vec<StoredArticle>> {
+        self.db.get_articles_by_ids(ids)
+    }
+
+    pub fn get_articles_by_urls(&self, urls: &[&str]) -> Result<Vec<StoredArticle>> {
+        self.db.get_articles_by_urls(urls)
+    }
+
     pub fn get_article_id_by_url(&self, url: &str) -> Result<Option<i64>> {
         self.db.get_article_id_by_url(url)
     }

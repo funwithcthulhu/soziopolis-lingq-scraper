@@ -1,13 +1,18 @@
+use crate::app_paths;
 use anyhow::{Context, Result, bail};
 use regex::Regex;
 use reqwest::{StatusCode, blocking::Client};
 use scraper::{ElementRef, Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::hash_map::DefaultHasher,
+    collections::{HashMap, HashSet, VecDeque},
+    fs,
+    hash::{Hash, Hasher},
     sync::mpsc,
+    sync::{Mutex, OnceLock},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const BASE_URL: &str = "https://www.soziopolis.de";
@@ -16,6 +21,17 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_BROWSE_SECTION_WORKERS: usize = 4;
 const MAX_SECTION_PAGE_DEPTH: usize = 80;
+const HTML_CACHE_TTL: Duration = Duration::from_secs(180);
+const HTML_DISK_CACHE_TTL: Duration = Duration::from_secs(900);
+const HTML_CACHE_CAPACITY: usize = 96;
+
+static HTML_CACHE: OnceLock<Mutex<HashMap<String, CachedHtml>>> = OnceLock::new();
+
+#[derive(Clone)]
+struct CachedHtml {
+    fetched_at: Instant,
+    body: String,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct Section {
@@ -541,6 +557,10 @@ impl SoziopolisClient {
     }
 
     fn fetch_html(&self, url: &str) -> Result<String> {
+        if let Some(cached) = lookup_cached_html(url) {
+            return Ok(cached);
+        }
+
         let mut last_error = None;
 
         for attempt in 1..=3 {
@@ -548,9 +568,15 @@ impl SoziopolisClient {
                 Ok(response) => {
                     let status = response.status();
                     if status.is_success() {
-                        return response
+                        let body = response
                             .text()
                             .with_context(|| format!("network: failed to read body for {url}"));
+                        if let Ok(body) = body {
+                            store_cached_html(url, &body);
+                            store_disk_cached_html(url, &body);
+                            return Ok(body);
+                        }
+                        return body;
                     }
 
                     let retryable = is_retryable_status(status);
@@ -637,6 +663,86 @@ fn section_page_urls(section: &Section, first_page_html: &str, limit: usize) -> 
         discovered = legacy_section_page_urls(section, desired_pages);
     }
     discovered
+}
+
+fn lookup_cached_html(url: &str) -> Option<String> {
+    if let Some(body) = lookup_memory_cached_html(url) {
+        return Some(body);
+    }
+
+    let body = lookup_disk_cached_html(url)?;
+    store_memory_cached_html(url, &body);
+    Some(body)
+}
+
+fn lookup_memory_cached_html(url: &str) -> Option<String> {
+    let mut cache = html_cache().lock().expect("html cache mutex poisoned");
+    let cached = cache.get(url)?;
+    if cached.fetched_at.elapsed() <= HTML_CACHE_TTL {
+        return Some(cached.body.clone());
+    }
+
+    cache.remove(url);
+    None
+}
+
+fn store_cached_html(url: &str, body: &str) {
+    store_memory_cached_html(url, body);
+}
+
+fn store_memory_cached_html(url: &str, body: &str) {
+    let mut cache = html_cache().lock().expect("html cache mutex poisoned");
+    if cache.len() >= HTML_CACHE_CAPACITY && !cache.contains_key(url) {
+        let stalest_key = cache
+            .iter()
+            .min_by_key(|(_, entry)| entry.fetched_at)
+            .map(|(key, _)| key.clone());
+        if let Some(stalest_key) = stalest_key {
+            cache.remove(&stalest_key);
+        }
+    }
+    cache.insert(
+        url.to_owned(),
+        CachedHtml {
+            fetched_at: Instant::now(),
+            body: body.to_owned(),
+        },
+    );
+}
+
+fn lookup_disk_cached_html(url: &str) -> Option<String> {
+    let path = browse_cache_path(url).ok()?;
+    let metadata = fs::metadata(&path).ok()?;
+    let modified = metadata.modified().ok()?;
+    let age = modified.elapsed().ok()?;
+    if age > HTML_DISK_CACHE_TTL {
+        let _ = fs::remove_file(&path);
+        return None;
+    }
+
+    fs::read_to_string(path).ok()
+}
+
+fn store_disk_cached_html(url: &str, body: &str) {
+    let Ok(path) = browse_cache_path(url) else {
+        return;
+    };
+    if let Err(err) = fs::write(&path, body) {
+        crate::logging::warn(format!(
+            "could not write browse cache file {}: {err}",
+            path.display()
+        ));
+    }
+}
+
+fn browse_cache_path(url: &str) -> Result<std::path::PathBuf> {
+    Ok(app_paths::browse_cache_dir()?.join(format!("{}.html", hash_url(url))))
+}
+
+fn hash_url(url: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    url.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 fn desired_section_page_count(limit: usize) -> usize {
@@ -728,6 +834,10 @@ fn is_retryable_status(status: StatusCode) -> bool {
             status,
             StatusCode::TOO_MANY_REQUESTS | StatusCode::REQUEST_TIMEOUT
         )
+}
+
+fn html_cache() -> &'static Mutex<HashMap<String, CachedHtml>> {
+    HTML_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn extract_body(document: &Html) -> Result<String> {

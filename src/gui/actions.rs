@@ -33,10 +33,6 @@ impl SoziopolisLingqGui {
         });
     }
 
-    pub(super) fn refresh_after_content_change(&mut self, reason: &str) {
-        self.request_content_refresh(reason);
-    }
-
     pub(super) fn request_content_refresh(&mut self, reason: &str) {
         self.library_loading = true;
         self.content_refresh_request_id = self.content_refresh_request_id.wrapping_add(1);
