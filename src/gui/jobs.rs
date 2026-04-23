@@ -1,4 +1,28 @@
 use super::*;
+use std::time::{Duration, Instant};
+
+const PROGRESS_EVENT_MIN_INTERVAL: Duration = Duration::from_millis(125);
+
+fn should_emit_progress_update(
+    last_emitted_at: &mut Option<Instant>,
+    processed: usize,
+    total: Option<usize>,
+) -> bool {
+    if processed == 0 {
+        return true;
+    }
+    if total.is_some_and(|total| processed >= total) {
+        *last_emitted_at = Some(Instant::now());
+        return true;
+    }
+    match last_emitted_at {
+        Some(last_emitted) if last_emitted.elapsed() < PROGRESS_EVENT_MIN_INTERVAL => false,
+        _ => {
+            *last_emitted_at = Some(Instant::now());
+            true
+        }
+    }
+}
 
 impl SoziopolisLingqGui {
     pub(super) fn next_job_id(&mut self) -> u64 {
@@ -362,9 +386,17 @@ impl SoziopolisLingqGui {
         std::thread::spawn(move || {
             let event = match panic::catch_unwind(AssertUnwindSafe(|| {
                 let progress_tx = tx.clone();
+                let mut last_progress_emit = None;
                 let result =
                     BrowseService::import_articles(articles, cancel_flag, move |progress| {
-                        let _ = progress_tx.send(AppEvent::BatchFetchProgress(progress));
+                        let total = progress.total;
+                        if should_emit_progress_update(
+                            &mut last_progress_emit,
+                            progress.processed,
+                            total,
+                        ) {
+                            let _ = progress_tx.send(AppEvent::BatchFetchProgress(progress));
+                        }
                     })
                     .map_err(|err| err.to_string());
                 match result {
@@ -433,13 +465,20 @@ impl SoziopolisLingqGui {
         std::thread::spawn(move || {
             let event = match panic::catch_unwind(AssertUnwindSafe(|| {
                 let progress_tx = tx.clone();
+                let mut last_progress_emit = None;
                 let result = LingqService::upload_articles(
                     ids,
                     api_key,
                     collection_id,
                     cancel_flag,
                     move |progress| {
-                        let _ = progress_tx.send(AppEvent::UploadProgress { job_id, progress });
+                        if should_emit_progress_update(
+                            &mut last_progress_emit,
+                            progress.processed,
+                            Some(progress.total),
+                        ) {
+                            let _ = progress_tx.send(AppEvent::UploadProgress { job_id, progress });
+                        }
                     },
                 )
                 .map_err(|err| err.to_string());

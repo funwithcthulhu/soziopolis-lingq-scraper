@@ -20,6 +20,15 @@ impl SoziopolisLingqGui {
                     ui.label(format!("Data: {}", path.display()));
                 }
                 ui.label(format!("Credential Manager: {}", credential_status));
+                let perf = crate::perf::snapshot();
+                ui.label(format!(
+                    "Browse cache H/M: {}/{}",
+                    perf.browse_cache_hits, perf.browse_cache_misses
+                ));
+                ui.label(format!(
+                    "Summary cache H/M: {}/{}",
+                    perf.browse_summary_cache_hits, perf.browse_summary_cache_misses
+                ));
             });
             ui.horizontal_wrapped(|ui| {
                 if ui.button("Open data folder").clicked() {
@@ -67,7 +76,7 @@ impl SoziopolisLingqGui {
                     }
                 }
                 if ui.button("Clear browse cache").clicked() {
-                    match crate::soziopolis::clear_browse_cache() {
+                    match commands::clear_browse_cache() {
                         Ok(removed) => {
                             self.set_notice(
                                 format!("Cleared {} cached browse file(s).", removed),
@@ -78,14 +87,32 @@ impl SoziopolisLingqGui {
                     }
                 }
                 if ui.button("Compact local data").clicked() {
-                    match Database::shared_default()
-                        .and_then(|db| db.with_db(|database| database.compact_storage()))
-                    {
+                    match AppContext::shared().and_then(|ctx| commands::compact_local_data(&ctx)) {
                         Ok(()) => {
                             self.set_notice(
                                 "Compacted the local database and trimmed the SQLite WAL.",
                                 NoticeKind::Success,
                             );
+                        }
+                        Err(err) => self.set_notice(err.to_string(), NoticeKind::Error),
+                    }
+                }
+                if ui.button("Rebuild search index").clicked() {
+                    match AppContext::shared().and_then(|ctx| commands::rebuild_search_index(&ctx))
+                    {
+                        Ok(()) => {
+                            self.set_notice("Rebuilt the local search index.", NoticeKind::Success)
+                        }
+                        Err(err) => self.set_notice(err.to_string(), NoticeKind::Error),
+                    }
+                }
+                if ui.button("Verify database").clicked() {
+                    match AppContext::shared().and_then(|ctx| commands::verify_database(&ctx)) {
+                        Ok(result) => {
+                            self.set_notice(
+                                format!("SQLite integrity check: {result}"),
+                                NoticeKind::Info,
+                            )
                         }
                         Err(err) => self.set_notice(err.to_string(), NoticeKind::Error),
                     }

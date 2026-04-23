@@ -1,5 +1,6 @@
 use crate::{
     database::{Database, LibraryStats, StoredArticle},
+    domain::ArticleListItem,
     jobs::{CompletedJob, QueueSnapshot},
     soziopolis::Article,
 };
@@ -30,6 +31,16 @@ impl<'a> ArticleRepository<'a> {
             .list_articles(search, section, only_not_uploaded, limit)
     }
 
+    pub fn list_article_cards(
+        &self,
+        search: Option<&str>,
+        section: Option<&str>,
+        only_not_uploaded: bool,
+    ) -> Result<Vec<ArticleListItem>> {
+        self.db
+            .list_article_cards(search, section, only_not_uploaded)
+    }
+
     pub fn get_article(&self, id: i64) -> Result<Option<StoredArticle>> {
         self.db.get_article(id)
     }
@@ -44,6 +55,10 @@ impl<'a> ArticleRepository<'a> {
 
     pub fn get_article_id_by_url(&self, url: &str) -> Result<Option<i64>> {
         self.db.get_article_id_by_url(url)
+    }
+
+    pub fn get_article_id_by_fingerprint(&self, fingerprint: &str) -> Result<Option<i64>> {
+        self.db.get_article_id_by_fingerprint(fingerprint)
     }
 
     pub fn get_all_article_urls(&self) -> Result<HashSet<String>> {

@@ -190,15 +190,20 @@ impl SoziopolisLingqGui {
         });
     }
 
-    pub(super) fn open_library_preview(&mut self, article: StoredArticle) {
-        logging::info(format!(
-            "opening stored preview for article #{}",
-            article.id
-        ));
-        self.preview_loading = false;
-        self.show_preview = true;
-        self.preview_article = Some(stored_article_to_preview_article(&article));
-        self.preview_stored_article = Some(article);
+    pub(super) fn open_library_preview(&mut self, article_id: i64) {
+        logging::info(format!("opening stored preview for article #{article_id}"));
+        match AppContext::shared().and_then(|ctx| commands::get_article_detail(&ctx, article_id)) {
+            Ok(Some(article)) => {
+                self.preview_loading = false;
+                self.show_preview = true;
+                self.preview_article = Some(stored_article_to_preview_article(&article));
+                self.preview_stored_article = Some(article);
+            }
+            Ok(None) => {
+                self.set_notice("Article not found in the local library.", NoticeKind::Error)
+            }
+            Err(err) => self.set_notice(err.to_string(), NoticeKind::Error),
+        }
     }
 
     pub(super) fn select_all_visible_articles(&mut self) {
@@ -260,9 +265,17 @@ impl SoziopolisLingqGui {
         self.enqueue_upload_job(ids, collection_id);
     }
 
-    pub(super) fn open_article(&mut self, article: StoredArticle) {
-        self.article_detail = Some(article);
-        self.current_view = View::Article;
-        self.save_settings();
+    pub(super) fn open_article(&mut self, article_id: i64) {
+        match AppContext::shared().and_then(|ctx| commands::get_article_detail(&ctx, article_id)) {
+            Ok(Some(article)) => {
+                self.article_detail = Some(article);
+                self.current_view = View::Article;
+                self.save_settings();
+            }
+            Ok(None) => {
+                self.set_notice("Article not found in the local library.", NoticeKind::Error)
+            }
+            Err(err) => self.set_notice(err.to_string(), NoticeKind::Error),
+        }
     }
 }

@@ -106,7 +106,7 @@ pub(super) enum AppEvent {
     BatchFetched {
         job_id: u64,
         saved_count: usize,
-        saved_articles: Vec<StoredArticle>,
+        saved_articles: Vec<ArticleListItem>,
         skipped_existing: usize,
         skipped_out_of_range: usize,
         failed: Vec<FailedFetchItem>,
@@ -163,7 +163,7 @@ pub struct SoziopolisLingqGui {
     pub(super) preview_loading: bool,
     pub(super) show_preview: bool,
 
-    pub(super) library_articles: Vec<StoredArticle>,
+    pub(super) library_articles: Vec<ArticleListItem>,
     pub(super) library_stats: Option<LibraryStats>,
     pub(super) library_loading: bool,
     pub(super) library_search: String,
@@ -175,7 +175,7 @@ pub struct SoziopolisLingqGui {
     pub(super) library_sort_mode: LibrarySortMode,
     pub(super) library_filters_expanded: bool,
     pub(super) library_search_cache_query: String,
-    pub(super) library_search_cache_results: Vec<StoredArticle>,
+    pub(super) library_search_cache_results: Vec<ArticleListItem>,
     pub(super) article_detail: Option<StoredArticle>,
 
     pub(super) lingq_api_key: String,

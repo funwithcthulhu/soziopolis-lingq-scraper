@@ -76,7 +76,7 @@ impl SoziopolisLingqGui {
         self.library_stats = Some(compute_local_library_stats(&self.library_articles));
     }
 
-    pub(super) fn apply_imported_articles(&mut self, mut saved_articles: Vec<StoredArticle>) {
+    pub(super) fn apply_imported_articles(&mut self, mut saved_articles: Vec<ArticleListItem>) {
         if saved_articles.is_empty() {
             self.invalidate_library_search_cache();
             return;
@@ -163,7 +163,7 @@ impl SoziopolisLingqGui {
         passes_new && passes_search
     }
 
-    pub(super) fn filtered_library_articles(&mut self) -> Result<Vec<StoredArticle>, String> {
+    pub(super) fn filtered_library_articles(&mut self) -> Result<Vec<ArticleListItem>, String> {
         let min_words = parse_optional_positive_usize_input(
             &self.library_word_count_min,
             "Library minimum words",
@@ -190,7 +190,7 @@ impl SoziopolisLingqGui {
                     .map_err(|err| err.to_string())?
                     .with_db(|db| {
                         let repository = ArticleRepository::new(db);
-                        repository.list_articles(Some(trimmed_search), None, false, 0)
+                        repository.list_article_cards(Some(trimmed_search), None, false)
                     })
                     .map_err(|err| err.to_string())?;
                 self.library_search_cache_query = trimmed_search.to_owned();
@@ -228,60 +228,83 @@ impl SoziopolisLingqGui {
 pub(super) fn render_library_article_card(
     app: &mut SoziopolisLingqGui,
     ui: &mut egui::Ui,
-    article: StoredArticle,
+    article: ArticleListItem,
 ) {
-    article_card_frame(ui, |ui| {
-        ui.vertical(|ui| {
-            ui.horizontal_wrapped(|ui| {
-                let mut selected_for_lingq = app.lingq_selected_articles.contains(&article.id);
-                if ui.checkbox(&mut selected_for_lingq, "").changed() {
-                    if selected_for_lingq {
-                        app.lingq_selected_articles.insert(article.id);
-                    } else {
-                        app.lingq_selected_articles.remove(&article.id);
-                    }
-                }
-                ui.label(RichText::new(&article.title).strong().size(14.5));
-                if article.uploaded_to_lingq {
-                    success_tag(ui, "Uploaded to LingQ");
-                } else {
-                    tag(ui, "Not uploaded to LingQ");
-                }
-            });
-            let preview_line = library_card_preview_line(&article);
-            if !preview_line.is_empty() {
-                ui.small(
-                    RichText::new(preview_line)
-                        .color(Color32::from_gray(178))
-                        .italics(),
-                );
-            }
-            ui.horizontal_wrapped(|ui| {
-                tag(ui, &effective_topic_for_article(&article));
-                tag(ui, &format!("{} words", article.word_count));
-                if !article.date.is_empty() {
-                    tag(ui, &article.date);
-                }
-                if ui.button("Preview").clicked() {
-                    app.open_library_preview(article.clone());
-                }
-                if ui.button("Open").clicked() {
-                    app.open_article(article.clone());
-                }
-                if ui.link("Original").clicked() {
-                    let _ = webbrowser::open(&article.url);
-                }
-                if ui.button("Delete").clicked() {
-                    match LibraryService::delete_article(article.id) {
-                        Ok(_) => {
-                            app.remove_article_from_local_state(article.id);
-                            app.set_notice("Article deleted.", NoticeKind::Info);
+    let library_job_active = app.lingq_uploading;
+    ui.push_id(article.id, |ui| {
+        article_card_frame(ui, |ui| {
+            ui.vertical(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    let mut selected_for_lingq = app.lingq_selected_articles.contains(&article.id);
+                    if ui
+                        .add_enabled(
+                            !library_job_active,
+                            egui::Checkbox::without_text(&mut selected_for_lingq),
+                        )
+                        .changed()
+                    {
+                        if selected_for_lingq {
+                            app.lingq_selected_articles.insert(article.id);
+                        } else {
+                            app.lingq_selected_articles.remove(&article.id);
                         }
-                        Err(err) => app.set_notice(err.to_string(), NoticeKind::Error),
                     }
+                    ui.label(RichText::new(&article.title).strong().size(14.5));
+                    if article.uploaded_to_lingq {
+                        success_tag(ui, "Uploaded to LingQ");
+                    } else {
+                        tag(ui, "Not uploaded to LingQ");
+                    }
+                });
+                let preview_line = library_card_preview_line(&article);
+                if !preview_line.is_empty() {
+                    ui.small(
+                        RichText::new(preview_line)
+                            .color(Color32::from_gray(178))
+                            .italics(),
+                    );
                 }
+                ui.horizontal_wrapped(|ui| {
+                    tag(ui, &effective_topic_for_article(&article));
+                    tag(ui, &format!("{} words", article.word_count));
+                    if !article.date.is_empty() {
+                        tag(ui, &article.date);
+                    }
+                    if ui
+                        .add_enabled(!library_job_active, egui::Button::new("Preview"))
+                        .clicked()
+                    {
+                        app.open_library_preview(article.id);
+                    }
+                    if ui
+                        .add_enabled(!library_job_active, egui::Button::new("Open"))
+                        .clicked()
+                    {
+                        app.open_article(article.id);
+                    }
+                    if ui
+                        .add_enabled(!library_job_active, egui::Link::new("Original"))
+                        .clicked()
+                    {
+                        let _ = webbrowser::open(&article.url);
+                    }
+                    if ui
+                        .add_enabled(!library_job_active, egui::Button::new("Delete"))
+                        .clicked()
+                    {
+                        match AppContext::shared()
+                            .and_then(|ctx| commands::delete_article(&ctx, article.id))
+                        {
+                            Ok(_) => {
+                                app.remove_article_from_local_state(article.id);
+                                app.set_notice("Article deleted.", NoticeKind::Info);
+                            }
+                            Err(err) => app.set_notice(err.to_string(), NoticeKind::Error),
+                        }
+                    }
+                });
+                ui.small(RichText::new(compact_url(&article.url)).color(Color32::from_gray(155)));
             });
-            ui.small(RichText::new(compact_url(&article.url)).color(Color32::from_gray(155)));
         });
     });
 }
@@ -298,6 +321,92 @@ pub(super) fn truncate_for_ui(value: &str, max_chars: usize) -> String {
     }
 }
 
+pub(super) trait LibraryArticleLike {
+    fn url(&self) -> &str;
+    fn title(&self) -> &str;
+    fn subtitle(&self) -> &str;
+    fn teaser(&self) -> &str;
+    fn preview_summary(&self) -> &str;
+    fn published_at(&self) -> &str;
+    fn section(&self) -> &str;
+    fn word_count(&self) -> i64;
+    fn fetched_at(&self) -> &str;
+    fn custom_topic(&self) -> &str;
+    fn body_text(&self) -> Option<&str>;
+}
+
+impl LibraryArticleLike for ArticleListItem {
+    fn url(&self) -> &str {
+        &self.url
+    }
+    fn title(&self) -> &str {
+        &self.title
+    }
+    fn subtitle(&self) -> &str {
+        &self.subtitle
+    }
+    fn teaser(&self) -> &str {
+        &self.teaser
+    }
+    fn preview_summary(&self) -> &str {
+        &self.preview_summary
+    }
+    fn published_at(&self) -> &str {
+        &self.published_at
+    }
+    fn section(&self) -> &str {
+        &self.section
+    }
+    fn word_count(&self) -> i64 {
+        self.word_count
+    }
+    fn fetched_at(&self) -> &str {
+        &self.fetched_at
+    }
+    fn custom_topic(&self) -> &str {
+        &self.custom_topic
+    }
+    fn body_text(&self) -> Option<&str> {
+        None
+    }
+}
+
+impl LibraryArticleLike for StoredArticle {
+    fn url(&self) -> &str {
+        &self.url
+    }
+    fn title(&self) -> &str {
+        &self.title
+    }
+    fn subtitle(&self) -> &str {
+        &self.subtitle
+    }
+    fn teaser(&self) -> &str {
+        &self.teaser
+    }
+    fn preview_summary(&self) -> &str {
+        &self.preview_summary
+    }
+    fn published_at(&self) -> &str {
+        &self.published_at
+    }
+    fn section(&self) -> &str {
+        &self.section
+    }
+    fn word_count(&self) -> i64 {
+        self.word_count
+    }
+    fn fetched_at(&self) -> &str {
+        &self.fetched_at
+    }
+    fn custom_topic(&self) -> &str {
+        &self.custom_topic
+    }
+    fn body_text(&self) -> Option<&str> {
+        Some(&self.body_text)
+    }
+}
+
 pub(super) fn compact_url(url: &str) -> String {
     let cleaned = url
         .trim_start_matches("https://")
@@ -307,22 +416,22 @@ pub(super) fn compact_url(url: &str) -> String {
 }
 
 pub(super) fn compare_library_articles(
-    a: &StoredArticle,
-    b: &StoredArticle,
+    a: &impl LibraryArticleLike,
+    b: &impl LibraryArticleLike,
     sort_mode: LibrarySortMode,
 ) -> std::cmp::Ordering {
     match sort_mode {
         LibrarySortMode::Newest => b
-            .published_at
-            .cmp(&a.published_at)
-            .then_with(|| b.fetched_at.cmp(&a.fetched_at)),
+            .published_at()
+            .cmp(a.published_at())
+            .then_with(|| b.fetched_at().cmp(a.fetched_at())),
         LibrarySortMode::Oldest => a
-            .published_at
-            .cmp(&b.published_at)
-            .then_with(|| a.fetched_at.cmp(&b.fetched_at)),
-        LibrarySortMode::Longest => b.word_count.cmp(&a.word_count),
-        LibrarySortMode::Shortest => a.word_count.cmp(&b.word_count),
-        LibrarySortMode::Title => a.title.to_lowercase().cmp(&b.title.to_lowercase()),
+            .published_at()
+            .cmp(b.published_at())
+            .then_with(|| a.fetched_at().cmp(b.fetched_at())),
+        LibrarySortMode::Longest => b.word_count().cmp(&a.word_count()),
+        LibrarySortMode::Shortest => a.word_count().cmp(&b.word_count()),
+        LibrarySortMode::Title => a.title().to_lowercase().cmp(&b.title().to_lowercase()),
     }
 }
 
@@ -330,7 +439,7 @@ pub(super) fn trim_chars_for_ui(input: &str, max: usize) -> String {
     input.chars().take(max).collect()
 }
 
-pub(super) fn collect_topic_counts(articles: &[StoredArticle]) -> BTreeMap<String, usize> {
+pub(super) fn collect_topic_counts(articles: &[ArticleListItem]) -> BTreeMap<String, usize> {
     let mut counts = BTreeMap::new();
     for article in articles {
         *counts
@@ -340,42 +449,41 @@ pub(super) fn collect_topic_counts(articles: &[StoredArticle]) -> BTreeMap<Strin
     counts
 }
 
-pub(super) fn auto_topic_for_article(article: &StoredArticle) -> String {
+pub(super) fn auto_topic_for_article(article: &impl LibraryArticleLike) -> String {
     generated_topic_from_fields(
-        &article.title,
-        &article.subtitle,
-        &article.section,
-        &article.url,
+        article.title(),
+        article.subtitle(),
+        article.section(),
+        article.url(),
     )
 }
 
-pub(super) fn effective_topic_for_article(article: &StoredArticle) -> String {
-    if !article.custom_topic.trim().is_empty() {
-        return article.custom_topic.trim().to_owned();
+pub(super) fn effective_topic_for_article(article: &impl LibraryArticleLike) -> String {
+    if !article.custom_topic().trim().is_empty() {
+        return article.custom_topic().trim().to_owned();
     }
 
     auto_topic_for_article(article)
 }
 
-pub(super) fn library_card_preview_line(article: &StoredArticle) -> String {
-    if !article.preview_summary.trim().is_empty() {
-        return truncate_for_ui(article.preview_summary.trim(), 160);
+pub(super) fn library_card_preview_line(article: &impl LibraryArticleLike) -> String {
+    if !article.preview_summary().trim().is_empty() {
+        return truncate_for_ui(article.preview_summary().trim(), 160);
     }
 
-    if !article.teaser.trim().is_empty() {
-        return truncate_for_ui(article.teaser.trim(), 160);
+    if !article.teaser().trim().is_empty() {
+        return truncate_for_ui(article.teaser().trim(), 160);
     }
 
-    if !article.subtitle.trim().is_empty() {
-        return truncate_for_ui(article.subtitle.trim(), 160);
+    if !article.subtitle().trim().is_empty() {
+        return truncate_for_ui(article.subtitle().trim(), 160);
     }
 
-    let preview = preview_excerpt(&article.body_text, 1, 160);
-    if preview.is_empty() {
-        String::new()
-    } else {
-        preview
-    }
+    article
+        .body_text()
+        .map(|body_text| preview_excerpt(body_text, 1, 160))
+        .filter(|preview| !preview.is_empty())
+        .unwrap_or_default()
 }
 
 pub(super) fn preview_excerpt(body_text: &str, max_blocks: usize, max_chars: usize) -> String {
@@ -427,7 +535,7 @@ pub(super) fn stored_article_to_preview_article(article: &StoredArticle) -> Arti
     }
 }
 
-pub(super) fn compute_local_library_stats(articles: &[StoredArticle]) -> LibraryStats {
+pub(super) fn compute_local_library_stats(articles: &[ArticleListItem]) -> LibraryStats {
     let total_articles = articles.len() as i64;
     let uploaded_articles = articles
         .iter()
@@ -471,7 +579,7 @@ pub(super) fn compute_local_library_stats(articles: &[StoredArticle]) -> Library
     }
 }
 
-pub(super) fn latest_saved_article_date(articles: &[StoredArticle]) -> Option<NaiveDate> {
+pub(super) fn latest_saved_article_date(articles: &[ArticleListItem]) -> Option<NaiveDate> {
     articles
         .iter()
         .filter_map(|article| {
@@ -760,6 +868,34 @@ pub(super) fn render_import_progress(ui: &mut egui::Ui, progress: &ImportProgres
     }
 }
 
+pub(super) fn render_upload_progress(ui: &mut egui::Ui, progress: &UploadProgress) {
+    let fraction = if progress.total == 0 {
+        0.0
+    } else {
+        (progress.processed as f32 / progress.total as f32).clamp(0.0, 1.0)
+    };
+
+    ui.add(
+        ProgressBar::new(fraction)
+            .desired_width(f32::INFINITY)
+            .text(format!(
+                "Uploading to LingQ: {} / {} processed",
+                progress.processed, progress.total
+            )),
+    );
+    ui.horizontal_wrapped(|ui| {
+        ui.small(format!(
+            "Uploaded {}, failed {}, remaining {}",
+            progress.uploaded,
+            progress.failed_count,
+            progress.total.saturating_sub(progress.processed)
+        ));
+    });
+    if !progress.current_item.is_empty() {
+        ui.small(RichText::new(&progress.current_item).monospace());
+    }
+}
+
 pub(super) fn format_import_progress_details(progress: &ImportProgress) -> String {
     let mut parts = vec![format!("Saved {}", progress.saved_count)];
     if progress.skipped_existing > 0 {
@@ -880,7 +1016,13 @@ pub(super) fn build_content_refresh_event(request_id: u64, reason: String) -> Ap
     logging::info(format!(
         "content refresh {request_id}: loading imported URL cache, library articles, and stats"
     ));
-    let result = LibraryService::refresh_content();
+    let result = AppContext::shared()
+        .and_then(|ctx| commands::refresh_content(&ctx))
+        .unwrap_or_else(|err| ContentRefreshResult {
+            imported_urls: Err(err.to_string()),
+            library_articles: Err(err.to_string()),
+            library_stats: Err(err.to_string()),
+        });
 
     AppEvent::ContentRefreshCompleted {
         request_id,

@@ -156,15 +156,19 @@ impl SoziopolisLingqGui {
 }
 
 impl eframe::App for SoziopolisLingqGui {
-    fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         self.guard_ui_phase("processing background events", |app| app.poll_events());
         ctx.request_repaint_after(Duration::from_millis(150));
-        self.guard_ui_phase("rendering top notice", |app| app.top_notice(ctx));
-        self.guard_ui_phase("rendering sidebar", |app| app.sidebar(ctx));
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        self.guard_ui_phase("rendering top notice", |app| app.top_notice(&ctx));
+        self.guard_ui_phase("rendering sidebar", |app| app.sidebar(&ctx));
         self.guard_ui_phase("rendering LingQ settings", |app| {
-            app.lingq_settings_window(ctx)
+            app.lingq_settings_window(&ctx)
         });
-        self.guard_ui_phase("rendering preview drawer", |app| app.preview_drawer(ctx));
+        self.guard_ui_phase("rendering preview drawer", |app| app.preview_drawer(&ctx));
         self.guard_ui_phase("rendering main view", |app| {
             egui::CentralPanel::default()
                 .frame(
@@ -172,7 +176,7 @@ impl eframe::App for SoziopolisLingqGui {
                         .fill(Color32::from_rgb(15, 18, 25))
                         .inner_margin(Margin::same(20)),
                 )
-                .show(ctx, |ui| match app.current_view {
+                .show(&ctx, |ui| match app.current_view {
                     View::Browse => app.browse_view(ui),
                     View::Library => app.library_view(ui),
                     View::Article => app.article_view(ui),

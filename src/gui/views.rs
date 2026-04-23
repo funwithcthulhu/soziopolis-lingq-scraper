@@ -242,6 +242,7 @@ impl SoziopolisLingqGui {
     }
 
     pub(super) fn render_browse_view(&mut self, ui: &mut egui::Ui) {
+        let browse_job_active = self.batch_fetching || self.browse_loading;
         let available_sections = SECTIONS.to_vec();
         let imported_count = self
             .browse_articles
@@ -293,21 +294,33 @@ impl SoziopolisLingqGui {
                     self.browse_articles.len(),
                     self.browse_limit
                 ));
-                if ui.button("Refresh").clicked() {
+                if ui
+                    .add_enabled(!browse_job_active, egui::Button::new("Refresh"))
+                    .clicked()
+                {
                     self.save_settings();
                     self.refresh_current_browse_scope();
                 }
-                if ui.button("Browse all sections").clicked() {
+                if ui
+                    .add_enabled(!browse_job_active, egui::Button::new("Browse all sections"))
+                    .clicked()
+                {
                     self.browse_only_new = false;
                     self.save_settings();
                     self.browse_all_sections();
                 }
-                if ui.button("Find new across sections").clicked() {
+                if ui
+                    .add_enabled(
+                        !browse_job_active,
+                        egui::Button::new("Find new across sections"),
+                    )
+                    .clicked()
+                {
                     self.discover_new_across_sections();
                 }
                 if ui
                     .add_enabled(
-                        !self.browse_loading
+                        !browse_job_active
                             && !(self.browse_scope == BrowseScope::CurrentSection
                                 && self.browse_end_reached),
                         egui::Button::new("Load more"),
@@ -320,17 +333,32 @@ impl SoziopolisLingqGui {
                         BrowseScope::AllSections => self.load_more_all_sections(),
                     }
                 }
-                if ui.button("Select visible not imported").clicked() {
+                if ui
+                    .add_enabled(
+                        !browse_job_active,
+                        egui::Button::new("Select visible not imported"),
+                    )
+                    .clicked()
+                {
                     self.browse_selected = visible_articles
                         .iter()
                         .filter(|article| !self.browse_imported_urls.contains(&article.url))
                         .map(|article| article.url.clone())
                         .collect();
                 }
-                if ui.checkbox(&mut self.browse_only_new, "Only new").changed() {
+                if ui
+                    .add_enabled_ui(!browse_job_active, |ui| {
+                        ui.checkbox(&mut self.browse_only_new, "Only new")
+                    })
+                    .inner
+                    .changed()
+                {
                     self.save_settings();
                 }
-                if ui.button("Clear selection").clicked() {
+                if ui
+                    .add_enabled(!browse_job_active, egui::Button::new("Clear selection"))
+                    .clicked()
+                {
                     self.browse_selected.clear();
                 }
                 if ui
@@ -389,47 +417,60 @@ impl SoziopolisLingqGui {
         ui.add_space(12.0);
         ScrollArea::vertical().show(ui, |ui| {
             for article in visible_articles {
-                article_card_frame(ui, |ui| {
-                    ui.vertical(|ui| {
-                        let mut checked = self.browse_selected.contains(&article.url);
-                        ui.horizontal_wrapped(|ui| {
-                            if ui.checkbox(&mut checked, "").changed() {
-                                if checked {
-                                    self.browse_selected.insert(article.url.clone());
-                                } else {
-                                    self.browse_selected.remove(&article.url);
+                ui.push_id(article.url.clone(), |ui| {
+                    article_card_frame(ui, |ui| {
+                        ui.vertical(|ui| {
+                            let mut checked = self.browse_selected.contains(&article.url);
+                            ui.horizontal_wrapped(|ui| {
+                                let selection_response = ui.add_enabled(
+                                    !browse_job_active,
+                                    egui::Checkbox::without_text(&mut checked),
+                                );
+                                if selection_response.changed() {
+                                    if checked {
+                                        self.browse_selected.insert(article.url.clone());
+                                    } else {
+                                        self.browse_selected.remove(&article.url);
+                                    }
                                 }
+                                ui.label(RichText::new(&article.title).strong().size(15.5));
+                            });
+                            if !article.teaser.is_empty() {
+                                ui.small(
+                                    RichText::new(truncate_for_ui(&article.teaser, 220))
+                                        .color(Color32::from_gray(188))
+                                        .italics(),
+                                );
                             }
-                            ui.label(RichText::new(&article.title).strong().size(15.5));
-                        });
-                        if !article.teaser.is_empty() {
+                            ui.horizontal_wrapped(|ui| {
+                                tag(ui, &article.section);
+                                if !article.author.is_empty() {
+                                    tag(ui, &truncate_for_ui(&article.author, 28));
+                                }
+                                if !article.date.is_empty() {
+                                    tag(ui, &article.date);
+                                }
+                                if self.browse_imported_urls.contains(&article.url) {
+                                    success_tag(ui, "Imported");
+                                }
+                                if ui
+                                    .add_enabled(!browse_job_active, egui::Link::new("Open original"))
+                                    .clicked()
+                                {
+                                    let _ = webbrowser::open(&article.url);
+                                }
+                                if ui
+                                    .add_enabled(!browse_job_active, egui::Link::new("Preview"))
+                                    .clicked()
+                                {
+                                    self.open_preview(article.url.clone());
+                                }
+                            });
                             ui.small(
-                                RichText::new(truncate_for_ui(&article.teaser, 220))
-                                    .color(Color32::from_gray(188))
-                                    .italics(),
+                                RichText::new(compact_url(&article.url))
+                                    .color(Color32::from_gray(150)),
                             );
-                        }
-                        ui.horizontal_wrapped(|ui| {
-                            tag(ui, &article.section);
-                            if !article.author.is_empty() {
-                                tag(ui, &truncate_for_ui(&article.author, 28));
-                            }
-                            if !article.date.is_empty() {
-                                tag(ui, &article.date);
-                            }
-                            if self.browse_imported_urls.contains(&article.url) {
-                                success_tag(ui, "Imported");
-                            }
-                            if ui.link("Open original").clicked() {
-                                let _ = webbrowser::open(&article.url);
-                            }
-                            if ui.link("Preview").clicked() {
-                                self.open_preview(article.url.clone());
-                            }
                         });
-                        ui.small(
-                            RichText::new(compact_url(&article.url)).color(Color32::from_gray(150)),
-                        );
                     });
                 });
                 ui.add_space(4.0);
@@ -443,7 +484,7 @@ impl SoziopolisLingqGui {
                 });
                 if ui
                     .add_enabled(
-                        !self.browse_loading
+                        !browse_job_active
                             && !(self.browse_scope == BrowseScope::CurrentSection
                                 && self.browse_end_reached),
                         egui::Button::new("Load 80 more"),
@@ -461,6 +502,7 @@ impl SoziopolisLingqGui {
     }
 
     pub(super) fn render_library_view(&mut self, ui: &mut egui::Ui) {
+        let library_job_active = self.lingq_uploading;
         let filtered_articles = match self.filtered_library_articles() {
             Ok(articles) => articles,
             Err(err) => {
@@ -565,17 +607,29 @@ impl SoziopolisLingqGui {
                 "{} article(s) selected for LingQ upload.",
                 self.lingq_selected_articles.len()
             ));
-            if ui.button("Select all visible").clicked() {
+            if ui
+                .add_enabled(!library_job_active, egui::Button::new("Select all visible"))
+                .clicked()
+            {
                 self.select_all_visible_articles();
             }
-            if ui.button("Select all not uploaded").clicked() {
+            if ui
+                .add_enabled(
+                    !library_job_active,
+                    egui::Button::new("Select all not uploaded"),
+                )
+                .clicked()
+            {
                 self.lingq_selected_articles = filtered_articles
                     .iter()
                     .filter(|article| !article.uploaded_to_lingq)
                     .map(|article| article.id)
                     .collect();
             }
-            if ui.button("Clear selection").clicked() {
+            if ui
+                .add_enabled(!library_job_active, egui::Button::new("Clear selection"))
+                .clicked()
+            {
                 self.lingq_selected_articles.clear();
             }
         });
@@ -703,6 +757,10 @@ impl SoziopolisLingqGui {
                 ui.label("Uploading...");
             }
         });
+        if let Some(progress) = &self.upload_progress {
+            ui.add_space(8.0);
+            render_upload_progress(ui, progress);
+        }
     }
 
     pub(super) fn render_article_view(&mut self, ui: &mut egui::Ui) {
@@ -861,7 +919,7 @@ impl SoziopolisLingqGui {
             });
         if let Some(stored_article) = open_full_article {
             self.show_preview = false;
-            self.open_article(stored_article);
+            self.open_article(stored_article.id);
         }
     }
 }

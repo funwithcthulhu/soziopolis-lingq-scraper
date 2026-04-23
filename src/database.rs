@@ -1,5 +1,6 @@
 use crate::{
     app_paths,
+    domain::ArticleListItem,
     jobs::{CompletedJob, QueueSnapshot},
     soziopolis::{Article, build_clean_text},
 };
@@ -12,7 +13,7 @@ use std::{
     time::Duration,
 };
 
-const CURRENT_SCHEMA_VERSION: i32 = 7;
+const CURRENT_SCHEMA_VERSION: i32 = 8;
 static SHARED_DEFAULT_DATABASE: OnceLock<SharedDatabase> = OnceLock::new();
 
 #[derive(Debug, Clone)]
@@ -29,6 +30,7 @@ pub struct StoredArticle {
     pub section: String,
     pub source_kind: String,
     pub source_label: String,
+    pub content_fingerprint: String,
     pub body_text: String,
     pub clean_text: String,
     pub word_count: i64,
@@ -114,6 +116,13 @@ impl Database {
                 ));
             }
         }
+        if let Ok(backfilled) = database.backfill_fingerprints_once() {
+            if backfilled > 0 {
+                crate::logging::info(format!(
+                    "backfilled content fingerprints for {backfilled} existing article(s)"
+                ));
+            }
+        }
         Ok(database)
     }
 
@@ -123,9 +132,9 @@ impl Database {
             r#"
             INSERT INTO articles (
                 url, title, subtitle, teaser, preview_summary, author, date, published_at, section, source_kind,
-            source_label, body_text, clean_text, word_count, fetched_at
+                source_label, content_fingerprint, body_text, clean_text, word_count, fetched_at
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
             ON CONFLICT(url) DO UPDATE SET
                 title = excluded.title,
                 subtitle = excluded.subtitle,
@@ -137,6 +146,7 @@ impl Database {
                 section = excluded.section,
                 source_kind = excluded.source_kind,
                 source_label = excluded.source_label,
+                content_fingerprint = excluded.content_fingerprint,
                 body_text = excluded.body_text,
                 clean_text = excluded.clean_text,
                 word_count = excluded.word_count,
@@ -155,6 +165,7 @@ impl Database {
             article.section,
             article.source_kind,
             article.source_label,
+            build_article_fingerprint(article),
             article.body_text,
             "",
             article.word_count as i64,
@@ -180,9 +191,9 @@ impl Database {
                 r#"
                 INSERT INTO articles (
                     url, title, subtitle, teaser, preview_summary, author, date, published_at, section, source_kind,
-                    source_label, body_text, clean_text, word_count, fetched_at
+                    source_label, content_fingerprint, body_text, clean_text, word_count, fetched_at
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
                 ON CONFLICT(url) DO UPDATE SET
                     title = excluded.title,
                     subtitle = excluded.subtitle,
@@ -194,6 +205,7 @@ impl Database {
                     section = excluded.section,
                     source_kind = excluded.source_kind,
                     source_label = excluded.source_label,
+                    content_fingerprint = excluded.content_fingerprint,
                     body_text = excluded.body_text,
                     clean_text = excluded.clean_text,
                     word_count = excluded.word_count,
@@ -214,6 +226,7 @@ impl Database {
                     article.section,
                     article.source_kind,
                     article.source_label,
+                    build_article_fingerprint(article),
                     article.body_text,
                     "",
                     article.word_count as i64,
@@ -241,7 +254,7 @@ impl Database {
             r#"
                 SELECT
                     id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section, source_kind,
-                    source_label, body_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
+                    source_label, content_fingerprint, body_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
                     lingq_lesson_id, lingq_lesson_url
                 FROM articles
                 WHERE (?1 IS NULL OR id IN (
@@ -255,7 +268,7 @@ impl Database {
             r#"
                 SELECT
                     id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section, source_kind,
-                    source_label, body_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
+                    source_label, content_fingerprint, body_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
                     lingq_lesson_id, lingq_lesson_url
                 FROM articles
                 WHERE (?1 IS NULL OR id IN (
@@ -291,12 +304,41 @@ impl Database {
             .map_err(Into::into)
     }
 
+    pub fn list_article_cards(
+        &self,
+        search: Option<&str>,
+        section: Option<&str>,
+        only_not_uploaded: bool,
+    ) -> Result<Vec<ArticleListItem>> {
+        let fts_query = build_fts_query(search);
+        let mut stmt = self.conn.prepare(
+            r#"
+                SELECT
+                    id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section,
+                    word_count, fetched_at, custom_topic, uploaded_to_lingq, lingq_lesson_id, lingq_lesson_url
+                FROM articles
+                WHERE (?1 IS NULL OR id IN (
+                    SELECT rowid FROM articles_fts WHERE articles_fts MATCH ?1
+                ))
+                  AND (?2 IS NULL OR section = ?2)
+                  AND (?3 = 0 OR uploaded_to_lingq = 0)
+                ORDER BY COALESCE(NULLIF(published_at, ''), fetched_at) DESC, fetched_at DESC
+            "#,
+        )?;
+        let rows = stmt.query_map(
+            params![fts_query, section, if only_not_uploaded { 1 } else { 0 }],
+            map_article_card_row,
+        )?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
     pub fn get_article(&self, id: i64) -> Result<Option<StoredArticle>> {
         let mut stmt = self.conn.prepare_cached(
             r#"
                 SELECT
                     id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section, source_kind,
-                    source_label, body_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
+                    source_label, content_fingerprint, body_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
                     lingq_lesson_id, lingq_lesson_url
                 FROM articles
                 WHERE id = ?1
@@ -319,7 +361,7 @@ impl Database {
             r#"
             SELECT
                 id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section, source_kind,
-                source_label, body_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
+                source_label, content_fingerprint, body_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
                 lingq_lesson_id, lingq_lesson_url
             FROM articles
             WHERE id IN ({placeholders})
@@ -344,7 +386,7 @@ impl Database {
             r#"
             SELECT
                 id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section, source_kind,
-                source_label, body_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
+                source_label, content_fingerprint, body_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
                 lingq_lesson_id, lingq_lesson_url
             FROM articles
             WHERE url IN ({placeholders})
@@ -362,6 +404,20 @@ impl Database {
             .query_row(
                 "SELECT id FROM articles WHERE url = ?1",
                 params![url],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn get_article_id_by_fingerprint(&self, fingerprint: &str) -> Result<Option<i64>> {
+        if fingerprint.trim().is_empty() {
+            return Ok(None);
+        }
+        self.conn
+            .query_row(
+                "SELECT id FROM articles WHERE content_fingerprint = ?1 LIMIT 1",
+                params![fingerprint],
                 |row| row.get(0),
             )
             .optional()
@@ -458,6 +514,16 @@ impl Database {
         )?;
         self.set_app_state("clean_text_compacted_v1", "1")?;
         Ok(())
+    }
+
+    pub fn rebuild_search_index(&self) -> Result<()> {
+        self.rebuild_fts_if_needed(true)
+    }
+
+    pub fn integrity_check(&self) -> Result<String> {
+        self.conn
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+            .map_err(Into::into)
     }
 
     pub fn load_queue_snapshot(&self) -> Result<QueueSnapshot> {
@@ -636,10 +702,17 @@ impl Database {
         }
         if version < CURRENT_SCHEMA_VERSION {
             needs_fts_rebuild |= self.migrate_to_v7()?;
-            version = CURRENT_SCHEMA_VERSION;
+            version = 7;
             self.set_user_version(version)?;
         } else {
             needs_fts_rebuild |= self.migrate_to_v7()?;
+        }
+        if version < CURRENT_SCHEMA_VERSION {
+            needs_fts_rebuild |= self.migrate_to_v8()?;
+            version = CURRENT_SCHEMA_VERSION;
+            self.set_user_version(version)?;
+        } else {
+            needs_fts_rebuild |= self.migrate_to_v8()?;
         }
 
         self.rebuild_fts_if_needed(needs_fts_rebuild)?;
@@ -801,6 +874,20 @@ impl Database {
             "#,
         )?;
         Ok(true)
+    }
+
+    fn migrate_to_v8(&self) -> Result<bool> {
+        let changed = self.add_column_if_missing(
+            "articles",
+            "content_fingerprint",
+            "TEXT NOT NULL DEFAULT ''",
+        )?;
+        self.conn.execute_batch(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_articles_content_fingerprint ON articles(content_fingerprint);
+            "#,
+        )?;
+        Ok(changed)
     }
 
     fn rebuild_fts_if_needed(&self, force_rebuild: bool) -> Result<()> {
@@ -969,6 +1056,49 @@ impl Database {
         self.set_app_state("clean_text_compacted_v1", "1")?;
         Ok(changed)
     }
+
+    fn backfill_fingerprints_once(&mut self) -> Result<usize> {
+        if self
+            .get_app_state("content_fingerprint_backfill_v1")?
+            .is_some_and(|value| value == "1")
+        {
+            return Ok(0);
+        }
+
+        let pending = {
+            let mut stmt = self.conn.prepare(
+                "SELECT id, title, subtitle, author, date, body_text FROM articles WHERE TRIM(content_fingerprint) = ''",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+
+        let transaction = self.conn.transaction()?;
+        {
+            let mut update_stmt = transaction
+                .prepare("UPDATE articles SET content_fingerprint = ?1 WHERE id = ?2")?;
+            for (id, title, subtitle, author, date, body_text) in &pending {
+                let fingerprint = build_text_fingerprint(title, subtitle, author, date, body_text);
+                update_stmt.execute(params![fingerprint, id])?;
+            }
+        }
+        transaction.execute(
+            "INSERT INTO app_state(key, value) VALUES ('content_fingerprint_backfill_v1', '1')
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [],
+        )?;
+        transaction.commit()?;
+        Ok(pending.len())
+    }
 }
 
 fn map_article_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredArticle> {
@@ -982,7 +1112,8 @@ fn map_article_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredArticle> {
     let section: String = row.get(9)?;
     let source_kind: String = row.get(10)?;
     let source_label: String = row.get(11)?;
-    let body_text: String = row.get(12)?;
+    let content_fingerprint: String = row.get(12)?;
+    let body_text: String = row.get(13)?;
     Ok(StoredArticle {
         id: row.get(0)?,
         url: row.get(1)?,
@@ -996,19 +1127,79 @@ fn map_article_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredArticle> {
         section,
         source_kind,
         source_label,
+        content_fingerprint,
         body_text: body_text.clone(),
         clean_text: build_clean_text(&title, &subtitle, &author, &date, &body_text),
-        word_count: row.get(13)?,
-        fetched_at: row.get(14)?,
-        custom_topic: row.get(15)?,
-        uploaded_to_lingq: row.get::<_, i64>(16)? != 0,
-        lingq_lesson_id: row.get(17)?,
-        lingq_lesson_url: row.get(18)?,
+        word_count: row.get(14)?,
+        fetched_at: row.get(15)?,
+        custom_topic: row.get(16)?,
+        uploaded_to_lingq: row.get::<_, i64>(17)? != 0,
+        lingq_lesson_id: row.get(18)?,
+        lingq_lesson_url: row.get(19)?,
+    })
+}
+
+fn map_article_card_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArticleListItem> {
+    Ok(ArticleListItem {
+        id: row.get(0)?,
+        url: row.get(1)?,
+        title: row.get(2)?,
+        subtitle: row.get(3)?,
+        teaser: row.get(4)?,
+        preview_summary: row.get(5)?,
+        author: row.get(6)?,
+        date: row.get(7)?,
+        published_at: row.get(8)?,
+        section: row.get(9)?,
+        word_count: row.get(10)?,
+        fetched_at: row.get(11)?,
+        custom_topic: row.get(12)?,
+        uploaded_to_lingq: row.get::<_, i64>(13)? != 0,
+        lingq_lesson_id: row.get(14)?,
+        lingq_lesson_url: row.get(15)?,
     })
 }
 
 fn build_article_preview_summary(article: &Article) -> String {
     build_preview_summary_from_fields(&article.teaser, &article.subtitle, &article.body_text)
+}
+
+fn build_article_fingerprint(article: &Article) -> String {
+    build_text_fingerprint(
+        &article.title,
+        &article.subtitle,
+        &article.author,
+        &article.date,
+        &article.body_text,
+    )
+}
+
+pub fn debug_article_fingerprint(article: &Article) -> String {
+    build_article_fingerprint(article)
+}
+
+fn build_text_fingerprint(
+    title: &str,
+    subtitle: &str,
+    author: &str,
+    date: &str,
+    body_text: &str,
+) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let body_prefix = normalize_preview_text(body_text, 320);
+    let seed = format!(
+        "{}|{}|{}|{}|{}",
+        title.trim().to_lowercase(),
+        subtitle.trim().to_lowercase(),
+        author.trim().to_lowercase(),
+        date.trim(),
+        body_prefix.trim().to_lowercase()
+    );
+    let mut hasher = DefaultHasher::new();
+    seed.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 fn build_preview_summary_from_fields(teaser: &str, subtitle: &str, body_text: &str) -> String {

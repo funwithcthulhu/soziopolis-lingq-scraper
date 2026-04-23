@@ -1,10 +1,14 @@
 pub mod app_paths;
+pub mod commands;
+pub mod context;
 pub mod credential_store;
 pub mod database;
+pub mod domain;
 pub mod gui;
 pub mod jobs;
 pub mod lingq;
 pub mod logging;
+pub mod perf;
 pub mod repositories;
 pub mod services;
 pub mod settings;

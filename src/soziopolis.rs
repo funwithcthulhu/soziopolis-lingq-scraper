@@ -27,6 +27,7 @@ const HTML_CACHE_CAPACITY: usize = 96;
 const HTML_DISK_CACHE_FILE_CAPACITY: usize = 160;
 
 static HTML_CACHE: OnceLock<Mutex<HashMap<String, CachedHtml>>> = OnceLock::new();
+static SUMMARY_CACHE: OnceLock<Mutex<HashMap<String, Vec<ArticleSummary>>>> = OnceLock::new();
 
 #[derive(Clone)]
 struct CachedHtml {
@@ -419,7 +420,7 @@ impl SoziopolisClient {
         total_limit: usize,
     ) -> Result<BrowseSectionResult> {
         let section_count = state.section_states.len().max(1);
-        let per_section_limit = total_limit.div_ceil(section_count).clamp(8, 20);
+        let per_section_limit = total_limit.div_ceil(section_count).max(8);
         let worker_count = browse_section_worker_count(section_count);
 
         for chunk in state
@@ -559,8 +560,10 @@ impl SoziopolisClient {
 
     fn fetch_html(&self, url: &str) -> Result<String> {
         if let Some(cached) = lookup_cached_html(url) {
+            crate::perf::record_browse_cache_hit();
             return Ok(cached);
         }
+        crate::perf::record_browse_cache_miss();
 
         let mut last_error = None;
 
@@ -615,43 +618,21 @@ impl SoziopolisClient {
         articles: &mut Vec<ArticleSummary>,
         report: &mut DiscoveryReport,
     ) {
-        let headline_selector = Selector::parse("h2 a[href], h3 a[href]").expect("selector");
-        for link in document.select(&headline_selector) {
+        for summary in cached_article_summaries_for_source(
+            self,
+            document,
+            fallback_section,
+            source_url,
+            source_kind,
+        ) {
             if articles.len() >= limit {
                 break;
             }
-
-            let Some(raw_href) = link.value().attr("href") else {
-                continue;
-            };
-            let article_url = absolute_url(raw_href);
-            if !self.article_url_re.is_match(&article_url) || is_excluded_article_url(&article_url)
-            {
-                continue;
-            }
-            if !seen.insert(article_url.clone()) {
+            if !seen.insert(summary.url.clone()) {
                 report.deduped_articles += 1;
                 continue;
             }
-
-            let title = clean_whitespace(&collect_text(link));
-            if !looks_like_article_title(&title) {
-                continue;
-            }
-
-            let teaser = extract_teaser_from_heading(link);
-            let metadata = extract_listing_metadata(link, fallback_section, source_url);
-
-            articles.push(ArticleSummary {
-                url: article_url,
-                title,
-                teaser,
-                author: metadata.author,
-                date: metadata.date,
-                section: metadata.section,
-                source_kind,
-                source_label: source_label(source_url),
-            });
+            articles.push(summary);
             report.record_article(source_kind);
         }
     }
@@ -741,6 +722,105 @@ fn store_disk_cached_html(url: &str, body: &str) {
 
 fn browse_cache_path(url: &str) -> Result<std::path::PathBuf> {
     Ok(app_paths::browse_cache_dir()?.join(format!("{}.html", hash_url(url))))
+}
+
+fn summary_cache() -> &'static Mutex<HashMap<String, Vec<ArticleSummary>>> {
+    SUMMARY_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn article_summary_cache_key(
+    source_url: &str,
+    fallback_section: Option<&str>,
+    source_kind: DiscoverySourceKind,
+    document_fingerprint: &str,
+) -> String {
+    format!(
+        "{}|{}|{}|{}",
+        source_url,
+        fallback_section.unwrap_or_default(),
+        source_kind.as_str(),
+        document_fingerprint
+    )
+}
+
+fn document_summary_fingerprint(document: &Html) -> String {
+    let headline_selector = match Selector::parse("h2 a[href], h3 a[href]") {
+        Ok(selector) => selector,
+        Err(_) => return String::from("selector-error"),
+    };
+    let mut signature = String::new();
+    let mut count = 0usize;
+    for link in document.select(&headline_selector).take(12) {
+        let href = link.value().attr("href").unwrap_or_default();
+        let title = clean_whitespace(&collect_text(link));
+        signature.push_str(href);
+        signature.push('|');
+        signature.push_str(&title);
+        signature.push('\n');
+        count += 1;
+    }
+    signature.push_str(&format!("count:{count}"));
+    hash_url(&signature)
+}
+
+fn cached_article_summaries_for_source(
+    scraper: &SoziopolisClient,
+    document: &Html,
+    fallback_section: Option<&str>,
+    source_url: &str,
+    source_kind: DiscoverySourceKind,
+) -> Vec<ArticleSummary> {
+    let cache_key = article_summary_cache_key(
+        source_url,
+        fallback_section,
+        source_kind,
+        &document_summary_fingerprint(document),
+    );
+    if let Ok(cache) = summary_cache().lock() {
+        if let Some(summaries) = cache.get(&cache_key) {
+            crate::perf::record_browse_summary_cache_hit();
+            return summaries.clone();
+        }
+    }
+    crate::perf::record_browse_summary_cache_miss();
+
+    let headline_selector = Selector::parse("h2 a[href], h3 a[href]").expect("selector");
+    let mut summaries = Vec::new();
+    for link in document.select(&headline_selector) {
+        let Some(raw_href) = link.value().attr("href") else {
+            continue;
+        };
+        let article_url = absolute_url(raw_href);
+        if !scraper.article_url_re.is_match(&article_url) || is_excluded_article_url(&article_url) {
+            continue;
+        }
+
+        let title = clean_whitespace(&collect_text(link));
+        if !looks_like_article_title(&title) {
+            continue;
+        }
+
+        let teaser = extract_teaser_from_heading(link);
+        let metadata = extract_listing_metadata(link, fallback_section, source_url);
+        summaries.push(ArticleSummary {
+            url: article_url,
+            title,
+            teaser,
+            author: metadata.author,
+            date: metadata.date,
+            section: metadata.section,
+            source_kind,
+            source_label: source_label(source_url),
+        });
+    }
+
+    if let Ok(mut cache) = summary_cache().lock() {
+        if cache.len() > HTML_CACHE_CAPACITY * 2 {
+            cache.clear();
+        }
+        cache.insert(cache_key, summaries.clone());
+    }
+    summaries
 }
 
 fn hash_url(url: &str) -> String {
@@ -1192,6 +1272,12 @@ pub(crate) fn build_clean_text(
 pub fn clear_browse_cache() -> Result<usize> {
     let cache_dir = app_paths::browse_cache_dir()?;
     let mut removed = 0usize;
+    if let Ok(mut cache) = html_cache().lock() {
+        cache.clear();
+    }
+    if let Ok(mut cache) = summary_cache().lock() {
+        cache.clear();
+    }
     for entry in fs::read_dir(cache_dir)? {
         let entry = entry?;
         let path = entry.path();

@@ -30,7 +30,7 @@ impl SoziopolisLingqGui {
         &mut self,
         job_id: u64,
         saved_count: usize,
-        saved_articles: Vec<StoredArticle>,
+        saved_articles: Vec<ArticleListItem>,
         skipped_existing: usize,
         skipped_out_of_range: usize,
         failed: Vec<FailedFetchItem>,

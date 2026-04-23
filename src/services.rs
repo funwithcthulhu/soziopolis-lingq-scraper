@@ -1,5 +1,6 @@
 use crate::{
     database::{Database, StoredArticle},
+    domain::ArticleListItem,
     jobs::{FailedFetchItem, ImportProgress, UploadFailure, UploadProgress, UploadSuccess},
     lingq::{Collection, LingqClient, UploadRequest},
     repositories::ArticleRepository,
@@ -25,13 +26,13 @@ const TESTED_MAX_UPLOAD_WORKERS: usize = 3;
 
 pub struct ContentRefreshResult {
     pub imported_urls: Result<HashSet<String>, String>,
-    pub library_articles: Result<Vec<crate::database::StoredArticle>, String>,
+    pub library_articles: Result<Vec<ArticleListItem>, String>,
     pub library_stats: Result<crate::database::LibraryStats, String>,
 }
 
 pub struct ImportOutcome {
     pub saved_count: usize,
-    pub saved_articles: Vec<StoredArticle>,
+    pub saved_articles: Vec<ArticleListItem>,
     pub skipped_existing: usize,
     pub skipped_out_of_range: usize,
     pub failed: Vec<FailedFetchItem>,
@@ -210,7 +211,22 @@ impl BrowseService {
             while let Ok(result) = result_rx.recv() {
                 processed += 1;
                 match result.outcome {
-                    Ok(article) => fetched_articles.push(article),
+                    Ok(article) => {
+                        let fingerprint = crate::database::debug_article_fingerprint(&article);
+                        let duplicate = shared_db
+                            .with_db(|db| {
+                                let repository = ArticleRepository::new(db);
+                                Ok(repository
+                                    .get_article_id_by_fingerprint(&fingerprint)?
+                                    .is_some())
+                            })
+                            .unwrap_or(false);
+                        if duplicate {
+                            skipped_existing += 1;
+                        } else {
+                            fetched_articles.push(article);
+                        }
+                    }
                     Err(message) => failed.push(FailedFetchItem {
                         url: result.summary.url.clone(),
                         title: result.summary.title.clone(),
@@ -255,7 +271,7 @@ impl BrowseService {
                     for article in &stored_articles {
                         known_urls.insert(article.url.clone());
                     }
-                    saved_articles.append(&mut stored_articles);
+                    saved_articles.extend(stored_articles.drain(..).map(ArticleListItem::from));
                 }
                 Err(batch_err) => {
                     crate::logging::warn(format!(
@@ -268,7 +284,7 @@ impl BrowseService {
                                     Ok(Some(stored)) => {
                                         saved_count += 1;
                                         known_urls.insert(stored.url.clone());
-                                        saved_articles.push(stored);
+                                        saved_articles.push(ArticleListItem::from(stored));
                                     }
                                     Ok(None) => failed.push(FailedFetchItem {
                                         url: article.url.clone(),
@@ -591,7 +607,7 @@ impl LibraryService {
                         .get_all_article_urls()
                         .map_err(|err| err.to_string()),
                     library_articles: repository
-                        .list_articles(None, None, false, 0)
+                        .list_article_cards(None, None, false)
                         .map_err(|err| err.to_string()),
                     library_stats: repository.get_stats().map_err(|err| err.to_string()),
                 })
