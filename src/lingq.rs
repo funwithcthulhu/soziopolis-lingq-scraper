@@ -46,6 +46,7 @@ struct LingqTokenResponse {
 #[derive(Deserialize)]
 struct LingqCollectionsResponse {
     results: Vec<LingqCollectionRow>,
+    next: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -95,27 +96,32 @@ impl LingqClient {
     }
 
     pub fn get_collections(&self, api_key: &str, language_code: &str) -> Result<Vec<Collection>> {
-        let response = self
-            .client
-            .get(format!("{}/{}/collections/my/", LINGQ_BASE, language_code))
-            .header("Authorization", format!("Token {api_key}"))
-            .send()
-            .context("LingQ collections request failed")?;
-        let collections: LingqCollectionsResponse = parse_json_response(
-            response,
-            "LingQ rejected the API key or collections request",
-            "LingQ collections response",
-        )?;
+        let mut collections = Vec::new();
+        let mut next_url = Some(format!("{}/{}/collections/my/", LINGQ_BASE, language_code));
 
-        Ok(collections
-            .results
-            .into_iter()
-            .map(|row| Collection {
+        while let Some(url) = next_url.take() {
+            let response = self
+                .client
+                .get(&url)
+                .header("Authorization", format!("Token {api_key}"))
+                .send()
+                .with_context(|| format!("LingQ collections request failed for {url}"))?;
+            let payload: LingqCollectionsResponse = parse_json_response(
+                response,
+                "LingQ rejected the API key or collections request",
+                "LingQ collections response",
+            )?;
+
+            collections.extend(payload.results.into_iter().map(|row| Collection {
                 id: row.id,
                 title: row.title,
                 lessons_count: row.lessons_count.or(row.lessons_count_alt).unwrap_or(0),
-            })
-            .collect())
+            }));
+            next_url = payload.next;
+        }
+
+        collections.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+        Ok(collections)
     }
 
     pub fn upload_lesson(&self, request: &UploadRequest) -> Result<UploadResponse> {
@@ -221,7 +227,7 @@ fn summarize_api_body(body: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_text, summarize_api_body};
+    use super::{Collection, normalize_text, summarize_api_body};
 
     #[test]
     fn normalize_text_preserves_paragraph_breaks() {
@@ -236,5 +242,24 @@ mod tests {
         assert!(summary.starts_with("error: detail"));
         assert!(summary.ends_with("..."));
         assert!(summary.len() <= 220);
+    }
+
+    #[test]
+    fn collections_are_sorted_case_insensitively() {
+        let mut collections = [
+            Collection {
+                id: 1,
+                title: "zebra".to_owned(),
+                lessons_count: 0,
+            },
+            Collection {
+                id: 2,
+                title: "Alpha".to_owned(),
+                lessons_count: 0,
+            },
+        ];
+        collections.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+        assert_eq!(collections[0].title, "Alpha");
+        assert_eq!(collections[1].title, "zebra");
     }
 }
