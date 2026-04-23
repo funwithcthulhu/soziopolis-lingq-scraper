@@ -5,18 +5,7 @@ use crate::{
 use anyhow::Result;
 
 pub fn refresh_content(ctx: &AppContext) -> Result<ContentRefreshResult> {
-    ctx.db.with_db(|db| {
-        let repository = ArticleRepository::new(db);
-        Ok(ContentRefreshResult {
-            imported_urls: repository
-                .get_all_article_urls()
-                .map_err(|err| err.to_string()),
-            library_articles: repository
-                .list_article_cards(None, None, false)
-                .map_err(|err| err.to_string()),
-            library_stats: repository.get_stats().map_err(|err| err.to_string()),
-        })
-    })
+    Ok(crate::services::LibraryService::refresh_content(ctx))
 }
 
 pub fn search_library_cards(
@@ -35,17 +24,11 @@ pub fn get_article_detail(
     ctx: &AppContext,
     id: i64,
 ) -> Result<Option<crate::database::StoredArticle>> {
-    ctx.db.with_db(|db| {
-        let repository = ArticleRepository::new(db);
-        repository.get_article(id)
-    })
+    crate::services::LibraryService::get_article(ctx, id)
 }
 
 pub fn delete_article(ctx: &AppContext, id: i64) -> Result<()> {
-    ctx.db.with_db(|db| {
-        let repository = ArticleRepository::new(db);
-        repository.delete_article(id)
-    })
+    crate::services::LibraryService::delete_article(ctx, id)
 }
 
 pub fn compact_local_data(ctx: &AppContext) -> Result<()> {

@@ -2,7 +2,6 @@ use crate::{
     app_paths, commands,
     context::AppContext,
     credential_store,
-    database::Database,
     database::{LibraryStats, SectionCount, StoredArticle},
     domain::ArticleListItem,
     jobs::{
@@ -46,6 +45,7 @@ mod helpers;
 mod jobs;
 mod shell;
 mod state;
+mod tasks;
 mod views;
 
 use helpers::*;

@@ -133,6 +133,8 @@ pub(super) enum AppEvent {
 }
 
 pub struct SoziopolisLingqGui {
+    pub(super) app_context: Option<AppContext>,
+    pub(super) app_context_error: Option<String>,
     pub(super) tx: Sender<AppEvent>,
     pub(super) rx: Receiver<AppEvent>,
     pub(super) settings: SettingsStore,
@@ -174,6 +176,7 @@ pub struct SoziopolisLingqGui {
     pub(super) library_group_by_topic: bool,
     pub(super) library_sort_mode: LibrarySortMode,
     pub(super) library_filters_expanded: bool,
+    pub(super) library_dense_mode: bool,
     pub(super) library_search_cache_query: String,
     pub(super) library_search_cache_results: Vec<ArticleListItem>,
     pub(super) article_detail: Option<StoredArticle>,

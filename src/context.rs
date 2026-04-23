@@ -7,6 +7,10 @@ pub struct AppContext {
 }
 
 impl AppContext {
+    pub fn new(db: SharedDatabase) -> Self {
+        Self { db }
+    }
+
     pub fn shared() -> Result<Self> {
         Ok(Self {
             db: Database::shared_default()?,

@@ -1,6 +1,14 @@
 use super::*;
 
 impl SoziopolisLingqGui {
+    pub(super) fn app_context(&self) -> Result<AppContext, String> {
+        self.app_context.clone().ok_or_else(|| {
+            self.app_context_error
+                .clone()
+                .unwrap_or_else(|| "The app database is unavailable right now.".to_owned())
+        })
+    }
+
     pub(super) fn guard_ui_phase(&mut self, phase: &str, run: impl FnOnce(&mut Self)) {
         if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| run(self))) {
             self.recover_from_ui_panic(phase, payload);
@@ -186,8 +194,9 @@ impl SoziopolisLingqGui {
             self.library_articles.clone()
         } else {
             if self.library_search_cache_query != trimmed_search {
-                self.library_search_cache_results = Database::shared_default()
-                    .map_err(|err| err.to_string())?
+                let app_context = self.app_context()?;
+                self.library_search_cache_results = app_context
+                    .db
                     .with_db(|db| {
                         let repository = ArticleRepository::new(db);
                         repository.list_article_cards(Some(trimmed_search), None, false)
@@ -292,7 +301,9 @@ pub(super) fn render_library_article_card(
                         .add_enabled(!library_job_active, egui::Button::new("Delete"))
                         .clicked()
                     {
-                        match AppContext::shared()
+                        match app
+                            .app_context()
+                            .map_err(anyhow::Error::msg)
                             .and_then(|ctx| commands::delete_article(&ctx, article.id))
                         {
                             Ok(_) => {
@@ -304,6 +315,85 @@ pub(super) fn render_library_article_card(
                     }
                 });
                 ui.small(RichText::new(compact_url(&article.url)).color(Color32::from_gray(155)));
+            });
+        });
+    });
+}
+
+pub(super) fn render_library_article_dense_row(
+    app: &mut SoziopolisLingqGui,
+    ui: &mut egui::Ui,
+    article: ArticleListItem,
+) {
+    let library_job_active = app.lingq_uploading;
+    ui.push_id(article.id, |ui| {
+        article_card_frame(ui, |ui| {
+            ui.vertical(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    let mut selected_for_lingq = app.lingq_selected_articles.contains(&article.id);
+                    if ui
+                        .add_enabled(
+                            !library_job_active,
+                            egui::Checkbox::without_text(&mut selected_for_lingq),
+                        )
+                        .changed()
+                    {
+                        if selected_for_lingq {
+                            app.lingq_selected_articles.insert(article.id);
+                        } else {
+                            app.lingq_selected_articles.remove(&article.id);
+                        }
+                    }
+                    ui.label(RichText::new(truncate_for_ui(&article.title, 72)).strong());
+                    if article.uploaded_to_lingq {
+                        success_tag(ui, "Uploaded");
+                    } else {
+                        tag(ui, "Not uploaded");
+                    }
+                    tag(ui, &format!("{} words", article.word_count));
+                    if !article.date.is_empty() {
+                        tag(ui, &article.date);
+                    }
+                    if ui
+                        .add_enabled(!library_job_active, egui::Link::new("Preview"))
+                        .clicked()
+                    {
+                        app.open_library_preview(article.id);
+                    }
+                    if ui
+                        .add_enabled(!library_job_active, egui::Link::new("Open"))
+                        .clicked()
+                    {
+                        app.open_article(article.id);
+                    }
+                    if ui
+                        .add_enabled(!library_job_active, egui::Link::new("Original"))
+                        .clicked()
+                    {
+                        let _ = webbrowser::open(&article.url);
+                    }
+                    if ui
+                        .add_enabled(!library_job_active, egui::Link::new("Delete"))
+                        .clicked()
+                    {
+                        match app
+                            .app_context()
+                            .map_err(anyhow::Error::msg)
+                            .and_then(|ctx| commands::delete_article(&ctx, article.id))
+                        {
+                            Ok(_) => {
+                                app.remove_article_from_local_state(article.id);
+                                app.set_notice("Article deleted.", NoticeKind::Info);
+                            }
+                            Err(err) => app.set_notice(err.to_string(), NoticeKind::Error),
+                        }
+                    }
+                });
+
+                let preview_line = library_card_preview_line(&article);
+                if !preview_line.is_empty() {
+                    ui.small(RichText::new(preview_line).color(Color32::from_gray(172)));
+                }
             });
         });
     });
@@ -837,6 +927,7 @@ pub(super) fn article_card_frame(ui: &mut egui::Ui, add_contents: impl FnOnce(&m
 }
 
 pub(super) fn render_import_progress(ui: &mut egui::Ui, progress: &ImportProgress) {
+    let bar_width = progress_bar_width(ui);
     let fraction = progress.total.map(|total| {
         if total == 0 {
             0.0
@@ -846,44 +937,60 @@ pub(super) fn render_import_progress(ui: &mut egui::Ui, progress: &ImportProgres
     });
 
     let mut bar = ProgressBar::new(fraction.unwrap_or(0.0))
-        .desired_width(f32::INFINITY)
         .text(match progress.total {
             Some(total) => format!(
-                "{}: {} / {} processed",
-                progress.phase, progress.processed, total
+                "{}: {}/{}",
+                truncate_for_ui(&progress.phase, 20),
+                progress.processed,
+                total
             ),
-            None => format!("{}: {} items processed", progress.phase, progress.processed),
+            None => format!(
+                "{}: {}",
+                truncate_for_ui(&progress.phase, 20),
+                progress.processed
+            ),
         });
 
     if fraction.is_none() {
         bar = bar.animate(true);
     }
 
-    ui.add(bar);
-    ui.horizontal_wrapped(|ui| {
+    ui.add_sized([bar_width, 20.0], bar);
+    ui.scope(|ui| {
+        ui.set_max_width(bar_width);
         ui.small(format_import_progress_details(progress));
     });
     if !progress.current_item.is_empty() {
-        ui.small(RichText::new(&progress.current_item).monospace());
+        ui.scope(|ui| {
+            ui.set_max_width(bar_width);
+            ui.small(
+                RichText::new(truncate_for_ui(
+                    &progress.current_item,
+                    progress_status_max_chars(ui),
+                ))
+                .monospace(),
+            );
+        });
     }
 }
 
 pub(super) fn render_upload_progress(ui: &mut egui::Ui, progress: &UploadProgress) {
+    let bar_width = progress_bar_width(ui);
     let fraction = if progress.total == 0 {
         0.0
     } else {
         (progress.processed as f32 / progress.total as f32).clamp(0.0, 1.0)
     };
 
-    ui.add(
-        ProgressBar::new(fraction)
-            .desired_width(f32::INFINITY)
-            .text(format!(
-                "Uploading to LingQ: {} / {} processed",
-                progress.processed, progress.total
-            )),
+    ui.add_sized(
+        [bar_width, 20.0],
+        ProgressBar::new(fraction).text(format!(
+            "LingQ upload: {}/{}",
+            progress.processed, progress.total
+        )),
     );
-    ui.horizontal_wrapped(|ui| {
+    ui.scope(|ui| {
+        ui.set_max_width(bar_width);
         ui.small(format!(
             "Uploaded {}, failed {}, remaining {}",
             progress.uploaded,
@@ -892,8 +999,25 @@ pub(super) fn render_upload_progress(ui: &mut egui::Ui, progress: &UploadProgres
         ));
     });
     if !progress.current_item.is_empty() {
-        ui.small(RichText::new(&progress.current_item).monospace());
+        ui.scope(|ui| {
+            ui.set_max_width(bar_width);
+            ui.small(
+                RichText::new(truncate_for_ui(
+                    &progress.current_item,
+                    progress_status_max_chars(ui),
+                ))
+                .monospace(),
+            );
+        });
     }
+}
+
+fn progress_bar_width(ui: &egui::Ui) -> f32 {
+    ui.available_width().min(760.0).max(220.0)
+}
+
+fn progress_status_max_chars(ui: &egui::Ui) -> usize {
+    ((ui.available_width() / 8.0).floor() as usize).clamp(28, 84)
 }
 
 pub(super) fn format_import_progress_details(progress: &ImportProgress) -> String {
@@ -1012,11 +1136,13 @@ pub(super) fn read_recent_log_excerpt(max_lines: usize) -> Result<String, String
     }
 }
 
-pub(super) fn build_content_refresh_event(request_id: u64, reason: String) -> AppEvent {
-    logging::info(format!(
-        "content refresh {request_id}: loading imported URL cache, library articles, and stats"
-    ));
-    let result = AppContext::shared()
+pub(super) fn build_content_refresh_event_with_context(
+    app_context: Option<AppContext>,
+    request_id: u64,
+    reason: String,
+) -> AppEvent {
+    let result = app_context
+        .ok_or_else(|| anyhow::anyhow!("The app database is unavailable right now."))
         .and_then(|ctx| commands::refresh_content(&ctx))
         .unwrap_or_else(|err| ContentRefreshResult {
             imported_urls: Err(err.to_string()),

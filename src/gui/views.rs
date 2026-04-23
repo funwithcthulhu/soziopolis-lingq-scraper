@@ -586,6 +586,7 @@ impl SoziopolisLingqGui {
                                 );
                             }
                         });
+                    ui.checkbox(&mut self.library_dense_mode, "Dense mode");
                     ui.checkbox(&mut self.library_group_by_topic, "Group by topic");
                     if ui.button("Refresh").clicked() {
                         self.request_content_refresh("manual library refresh");
@@ -659,12 +660,20 @@ impl SoziopolisLingqGui {
                         );
                         ui.add_space(4.0);
                     }
-                    render_library_article_card(self, ui, article);
+                    if self.library_dense_mode {
+                        render_library_article_dense_row(self, ui, article);
+                    } else {
+                        render_library_article_card(self, ui, article);
+                    }
                     ui.add_space(4.0);
                 }
             } else {
                 for article in filtered_articles {
-                    render_library_article_card(self, ui, article);
+                    if self.library_dense_mode {
+                        render_library_article_dense_row(self, ui, article);
+                    } else {
+                        render_library_article_card(self, ui, article);
+                    }
                     ui.add_space(4.0);
                 }
             }

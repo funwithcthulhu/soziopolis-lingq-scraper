@@ -31,14 +31,14 @@ impl SoziopolisLingqGui {
     }
 
     pub(super) fn load_persisted_queue_state(&mut self) {
-        let shared_db = match Database::shared_default() {
-            Ok(database) => database,
+        let app_context = match self.app_context() {
+            Ok(context) => context,
             Err(err) => {
-                logging::warn(format!("could not open SQLite for queue restore: {err}"));
+                logging::warn(format!("could not restore queue state: {err}"));
                 return;
             }
         };
-        match shared_db.with_db(|database| {
+        match app_context.db.with_db(|database| {
             let repository = JobRepository::new(database);
             let snapshot = repository.load_snapshot()?;
             let history = repository.list_completed_job_history(25).ok();
@@ -83,16 +83,14 @@ impl SoziopolisLingqGui {
             failed_uploads: self.last_failed_uploads.clone(),
         };
 
-        let shared_db = match Database::shared_default() {
-            Ok(database) => database,
+        let app_context = match self.app_context() {
+            Ok(context) => context,
             Err(err) => {
-                logging::warn(format!(
-                    "could not open SQLite for queue persistence: {err}"
-                ));
+                logging::warn(format!("could not persist queue state: {err}"));
                 return;
             }
         };
-        if let Err(err) = shared_db.with_db(|database| {
+        if let Err(err) = app_context.db.with_db(|database| {
             let mut repository = JobRepository::new(database);
             repository.save_snapshot(&snapshot)
         }) {
@@ -338,8 +336,8 @@ impl SoziopolisLingqGui {
         while self.completed_jobs.len() > 25 {
             self.completed_jobs.pop_back();
         }
-        if let Ok(shared_db) = Database::shared_default() {
-            if let Err(err) = shared_db.with_db(|database| {
+        if let Ok(app_context) = self.app_context() {
+            if let Err(err) = app_context.db.with_db(|database| {
                 let repository = JobRepository::new(database);
                 repository.record_completed_job_history(&completed_job)
             }) {
@@ -382,21 +380,32 @@ impl SoziopolisLingqGui {
         cancel_flag: Arc<AtomicBool>,
     ) {
         logging::info(format!("starting import worker for job #{job_id}"));
+        let app_context = self.app_context().ok();
         let tx = self.tx.clone();
-        std::thread::spawn(move || {
-            let event = match panic::catch_unwind(AssertUnwindSafe(|| {
-                let progress_tx = tx.clone();
+        super::tasks::spawn_app_event_task(
+            tx,
+            "Import worker",
+            move |progress_tx| {
                 let mut last_progress_emit = None;
-                let result =
-                    BrowseService::import_articles(articles, cancel_flag, move |progress| {
-                        let total = progress.total;
-                        if should_emit_progress_update(
-                            &mut last_progress_emit,
-                            progress.processed,
-                            total,
-                        ) {
-                            let _ = progress_tx.send(AppEvent::BatchFetchProgress(progress));
-                        }
+                let result = app_context
+                    .ok_or_else(|| anyhow::anyhow!("The app database is unavailable right now."))
+                    .and_then(|ctx| {
+                        BrowseService::import_articles(
+                            &ctx,
+                            articles,
+                            cancel_flag,
+                            move |progress| {
+                                let total = progress.total;
+                                if should_emit_progress_update(
+                                    &mut last_progress_emit,
+                                    progress.processed,
+                                    total,
+                                ) {
+                                    let _ =
+                                        progress_tx.send(AppEvent::BatchFetchProgress(progress));
+                                }
+                            },
+                        )
                     })
                     .map_err(|err| err.to_string());
                 match result {
@@ -424,32 +433,22 @@ impl SoziopolisLingqGui {
                         canceled: false,
                     },
                 }
-            })) {
-                Ok(event) => event,
-                Err(payload) => {
-                    let message = format!(
-                        "Import worker hit an internal error: {}",
-                        panic_payload_message(payload.as_ref())
-                    );
-                    logging::error(&message);
-                    AppEvent::BatchFetched {
-                        job_id,
-                        saved_count: 0,
-                        saved_articles: Vec::new(),
-                        skipped_existing: 0,
-                        skipped_out_of_range: 0,
-                        failed: vec![FailedFetchItem {
-                            url: String::new(),
-                            title: String::new(),
-                            category: "internal error".to_owned(),
-                            message,
-                        }],
-                        canceled: false,
-                    }
-                }
-            };
-            let _ = tx.send(event);
-        });
+            },
+            move |message| AppEvent::BatchFetched {
+                job_id,
+                saved_count: 0,
+                saved_articles: Vec::new(),
+                skipped_existing: 0,
+                skipped_out_of_range: 0,
+                failed: vec![FailedFetchItem {
+                    url: String::new(),
+                    title: String::new(),
+                    category: "internal error".to_owned(),
+                    message,
+                }],
+                canceled: false,
+            },
+        );
     }
 
     pub(super) fn spawn_upload_job(
@@ -461,26 +460,34 @@ impl SoziopolisLingqGui {
         cancel_flag: Arc<AtomicBool>,
     ) {
         logging::info(format!("starting LingQ upload worker for job #{job_id}"));
+        let app_context = self.app_context().ok();
         let tx = self.tx.clone();
-        std::thread::spawn(move || {
-            let event = match panic::catch_unwind(AssertUnwindSafe(|| {
-                let progress_tx = tx.clone();
+        super::tasks::spawn_app_event_task(
+            tx,
+            "LingQ upload worker",
+            move |progress_tx| {
                 let mut last_progress_emit = None;
-                let result = LingqService::upload_articles(
-                    ids,
-                    api_key,
-                    collection_id,
-                    cancel_flag,
-                    move |progress| {
-                        if should_emit_progress_update(
-                            &mut last_progress_emit,
-                            progress.processed,
-                            Some(progress.total),
-                        ) {
-                            let _ = progress_tx.send(AppEvent::UploadProgress { job_id, progress });
-                        }
-                    },
-                )
+                let result = app_context
+                    .ok_or_else(|| anyhow::anyhow!("The app database is unavailable right now."))
+                    .and_then(|ctx| {
+                        LingqService::upload_articles(
+                            &ctx,
+                            ids,
+                            api_key,
+                            collection_id,
+                            cancel_flag,
+                            move |progress| {
+                                if should_emit_progress_update(
+                                    &mut last_progress_emit,
+                                    progress.processed,
+                                    Some(progress.total),
+                                ) {
+                                    let _ =
+                                        progress_tx.send(AppEvent::UploadProgress { job_id, progress });
+                                }
+                            },
+                        )
+                    })
                 .map_err(|err| err.to_string());
                 match result {
                     Ok(result) => AppEvent::BatchUploaded {
@@ -502,29 +509,19 @@ impl SoziopolisLingqGui {
                         canceled: false,
                     },
                 }
-            })) {
-                Ok(event) => event,
-                Err(payload) => {
-                    let message = format!(
-                        "LingQ upload worker hit an internal error: {}",
-                        panic_payload_message(payload.as_ref())
-                    );
-                    logging::error(&message);
-                    AppEvent::BatchUploaded {
-                        job_id,
-                        uploaded: 0,
-                        successes: Vec::new(),
-                        failed: vec![UploadFailure {
-                            article_id: 0,
-                            title: "Upload job".to_owned(),
-                            message,
-                        }],
-                        canceled: false,
-                    }
-                }
-            };
-            let _ = tx.send(event);
-        });
+            },
+            move |message| AppEvent::BatchUploaded {
+                job_id,
+                uploaded: 0,
+                successes: Vec::new(),
+                failed: vec![UploadFailure {
+                    article_id: 0,
+                    title: "Upload job".to_owned(),
+                    message,
+                }],
+                canceled: false,
+            },
+        );
     }
 
     pub(super) fn retry_failed_fetches(&mut self) {

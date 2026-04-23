@@ -1,5 +1,6 @@
 use crate::{
-    database::{Database, StoredArticle},
+    context::AppContext,
+    database::StoredArticle,
     domain::ArticleListItem,
     jobs::{FailedFetchItem, ImportProgress, UploadFailure, UploadProgress, UploadSuccess},
     lingq::{Collection, LingqClient, UploadRequest},
@@ -147,6 +148,7 @@ impl BrowseService {
     }
 
     pub fn import_articles(
+        app_context: &AppContext,
         articles: Vec<ArticleSummary>,
         cancel_flag: Arc<AtomicBool>,
         mut on_progress: impl FnMut(ImportProgress),
@@ -158,7 +160,7 @@ impl BrowseService {
         let mut failed = Vec::new();
         let total = articles.len();
         let mut canceled = false;
-        let shared_db = Database::shared_default()?;
+        let shared_db = app_context.db.clone();
         let mut known_urls = shared_db.with_db(|db| {
             let repository = ArticleRepository::new(db);
             repository.get_all_article_urls()
@@ -586,20 +588,10 @@ mod tests {
 pub struct LibraryService;
 
 impl LibraryService {
-    pub fn refresh_content() -> ContentRefreshResult {
+    pub fn refresh_content(app_context: &AppContext) -> ContentRefreshResult {
         let started = Instant::now();
-        let shared_db = match Database::shared_default() {
-            Ok(db) => db,
-            Err(err) => {
-                let message = err.to_string();
-                return ContentRefreshResult {
-                    imported_urls: Err(message.clone()),
-                    library_articles: Err(message.clone()),
-                    library_stats: Err(message),
-                };
-            }
-        };
-        let result = shared_db
+        let result = app_context
+            .db
             .with_db(|db| {
                 let repository = ArticleRepository::new(db);
                 Ok(ContentRefreshResult {
@@ -627,15 +619,15 @@ impl LibraryService {
         result
     }
 
-    pub fn delete_article(id: i64) -> Result<()> {
-        Database::shared_default()?.with_db(|db| {
+    pub fn delete_article(app_context: &AppContext, id: i64) -> Result<()> {
+        app_context.db.with_db(|db| {
             let repository = ArticleRepository::new(db);
             repository.delete_article(id)
         })
     }
 
-    pub fn get_article(id: i64) -> Result<Option<StoredArticle>> {
-        Database::shared_default()?.with_db(|db| {
+    pub fn get_article(app_context: &AppContext, id: i64) -> Result<Option<StoredArticle>> {
+        app_context.db.with_db(|db| {
             let repository = ArticleRepository::new(db);
             repository.get_article(id)
         })
@@ -654,6 +646,7 @@ impl LingqService {
     }
 
     pub fn upload_articles(
+        app_context: &AppContext,
         ids: Vec<i64>,
         api_key: String,
         collection_id: Option<i64>,
@@ -661,7 +654,7 @@ impl LingqService {
         mut on_progress: impl FnMut(UploadProgress),
     ) -> Result<UploadOutcome> {
         let started = Instant::now();
-        let shared_db = Database::shared_default()?;
+        let shared_db = app_context.db.clone();
         let mut uploaded = 0usize;
         let mut successes = Vec::new();
         let mut failed = Vec::new();

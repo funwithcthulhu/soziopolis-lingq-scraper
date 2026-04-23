@@ -87,7 +87,11 @@ impl SoziopolisLingqGui {
                     }
                 }
                 if ui.button("Compact local data").clicked() {
-                    match AppContext::shared().and_then(|ctx| commands::compact_local_data(&ctx)) {
+                    match self
+                        .app_context()
+                        .map_err(anyhow::Error::msg)
+                        .and_then(|ctx| commands::compact_local_data(&ctx))
+                    {
                         Ok(()) => {
                             self.set_notice(
                                 "Compacted the local database and trimmed the SQLite WAL.",
@@ -98,7 +102,10 @@ impl SoziopolisLingqGui {
                     }
                 }
                 if ui.button("Rebuild search index").clicked() {
-                    match AppContext::shared().and_then(|ctx| commands::rebuild_search_index(&ctx))
+                    match self
+                        .app_context()
+                        .map_err(anyhow::Error::msg)
+                        .and_then(|ctx| commands::rebuild_search_index(&ctx))
                     {
                         Ok(()) => {
                             self.set_notice("Rebuilt the local search index.", NoticeKind::Success)
@@ -107,7 +114,11 @@ impl SoziopolisLingqGui {
                     }
                 }
                 if ui.button("Verify database").clicked() {
-                    match AppContext::shared().and_then(|ctx| commands::verify_database(&ctx)) {
+                    match self
+                        .app_context()
+                        .map_err(anyhow::Error::msg)
+                        .and_then(|ctx| commands::verify_database(&ctx))
+                    {
                         Ok(result) => {
                             self.set_notice(
                                 format!("SQLite integrity check: {result}"),

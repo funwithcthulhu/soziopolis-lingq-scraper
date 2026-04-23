@@ -39,8 +39,14 @@ impl SoziopolisLingqGui {
         let (lingq_api_key, startup_notice) = load_lingq_api_key_from_storage();
         let lingq_connected = !lingq_api_key.trim().is_empty();
         let lingq_selected_collection = settings.data().lingq_collection_id;
+        let (app_context, app_context_error) = match AppContext::shared() {
+            Ok(context) => (Some(context), None),
+            Err(err) => (None, Some(err.to_string())),
+        };
 
         let mut app = Self {
+            app_context,
+            app_context_error,
             tx,
             rx,
             settings,
@@ -80,6 +86,7 @@ impl SoziopolisLingqGui {
             library_group_by_topic: true,
             library_sort_mode: LibrarySortMode::Newest,
             library_filters_expanded: true,
+            library_dense_mode: false,
             library_search_cache_query: String::new(),
             library_search_cache_results: Vec::new(),
             article_detail: None,
@@ -108,7 +115,10 @@ impl SoziopolisLingqGui {
         app.load_persisted_queue_state();
         app.refresh_browse();
         app.request_content_refresh("app startup");
-        if let Some(message) = settings_notice.or(startup_notice) {
+        if let Some(message) = settings_notice
+            .or(startup_notice)
+            .or_else(|| app.app_context_error.clone())
+        {
             app.set_notice(message, NoticeKind::Info);
         }
         if app.lingq_connected {
