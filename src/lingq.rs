@@ -1,6 +1,6 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use reqwest::blocking::Client;
-use serde::Deserialize;
+use serde::{Deserialize, de::DeserializeOwned};
 
 const LINGQ_BASE: &str = "https://www.lingq.com/api/v3";
 const LINGQ_AUTH: &str = "https://www.lingq.com/api/v2/api-token-auth/";
@@ -80,13 +80,11 @@ impl LingqClient {
             .form(&params)
             .send()
             .context("LingQ login request failed")?;
-
-        let response = response
-            .error_for_status()
-            .context("LingQ rejected the username/password login")?;
-        let payload: LingqTokenResponse = response
-            .json()
-            .context("failed to parse LingQ login response")?;
+        let payload: LingqTokenResponse = parse_json_response(
+            response,
+            "LingQ rejected the username/password login",
+            "LingQ login response",
+        )?;
 
         let token = payload
             .token
@@ -103,13 +101,11 @@ impl LingqClient {
             .header("Authorization", format!("Token {api_key}"))
             .send()
             .context("LingQ collections request failed")?;
-
-        let response = response
-            .error_for_status()
-            .context("LingQ rejected the API key or collections request")?;
-        let collections: LingqCollectionsResponse = response
-            .json()
-            .context("failed to parse LingQ collections response")?;
+        let collections: LingqCollectionsResponse = parse_json_response(
+            response,
+            "LingQ rejected the API key or collections request",
+            "LingQ collections response",
+        )?;
 
         Ok(collections
             .results
@@ -149,13 +145,11 @@ impl LingqClient {
             .json(&payload)
             .send()
             .context("LingQ upload request failed")?;
-
-        let response = response
-            .error_for_status()
-            .context("LingQ rejected the lesson upload")?;
-        let lesson: LingqLessonResponse = response
-            .json()
-            .context("failed to parse LingQ upload response")?;
+        let lesson: LingqLessonResponse = parse_json_response(
+            response,
+            "LingQ rejected the lesson upload",
+            "LingQ upload response",
+        )?;
 
         Ok(UploadResponse {
             lesson_id: lesson.id,
@@ -167,10 +161,80 @@ impl LingqClient {
     }
 }
 
+fn parse_json_response<T>(
+    response: reqwest::blocking::Response,
+    rejection_context: &str,
+    parse_context: &str,
+) -> Result<T>
+where
+    T: DeserializeOwned,
+{
+    let status = response.status();
+    let body = response
+        .text()
+        .with_context(|| format!("failed to read {parse_context} body"))?;
+
+    if !status.is_success() {
+        let body_summary = summarize_api_body(&body);
+        return Err(anyhow!(
+            "{} (status {}).{}",
+            rejection_context,
+            status,
+            if body_summary.is_empty() {
+                String::new()
+            } else {
+                format!(" Response: {body_summary}")
+            }
+        ));
+    }
+
+    serde_json::from_str(&body).with_context(|| {
+        let body_summary = summarize_api_body(&body);
+        if body_summary.is_empty() {
+            format!("failed to parse {parse_context}")
+        } else {
+            format!("failed to parse {parse_context}: {body_summary}")
+        }
+    })
+}
+
 fn normalize_text(text: &str) -> String {
     text.split("\n\n")
         .map(|paragraph| paragraph.split_whitespace().collect::<Vec<_>>().join(" "))
         .filter(|paragraph| !paragraph.is_empty())
         .collect::<Vec<_>>()
         .join("\n\n")
+}
+
+fn summarize_api_body(body: &str) -> String {
+    let condensed = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    if condensed.is_empty() {
+        return String::new();
+    }
+
+    if condensed.chars().count() <= 220 {
+        condensed
+    } else {
+        format!("{}...", condensed.chars().take(217).collect::<String>())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{normalize_text, summarize_api_body};
+
+    #[test]
+    fn normalize_text_preserves_paragraph_breaks() {
+        let text = " One   two \n\n  Three   four ";
+        assert_eq!(normalize_text(text), "One two\n\nThree four");
+    }
+
+    #[test]
+    fn summarize_api_body_condenses_whitespace_and_truncates() {
+        let input = format!("error: {}", "detail ".repeat(80));
+        let summary = summarize_api_body(&input);
+        assert!(summary.starts_with("error: detail"));
+        assert!(summary.ends_with("..."));
+        assert!(summary.len() <= 220);
+    }
 }

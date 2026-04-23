@@ -34,10 +34,6 @@ pub fn database_path() -> Result<PathBuf> {
     Ok(data_dir()?.join("soziopolis_lingq_tool.db"))
 }
 
-pub fn queue_state_path() -> Result<PathBuf> {
-    Ok(data_dir()?.join("queue_state.json"))
-}
-
 pub fn logs_dir() -> Result<PathBuf> {
     ensure_dir(&data_dir()?.join("logs"))
 }

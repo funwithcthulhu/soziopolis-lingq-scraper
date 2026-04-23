@@ -2,10 +2,20 @@ use anyhow::{Context, Result, bail};
 use regex::Regex;
 use reqwest::{StatusCode, blocking::Client};
 use scraper::{ElementRef, Html, Selector};
-use std::{collections::HashSet, time::Duration};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::{HashSet, VecDeque},
+    sync::mpsc,
+    thread,
+    time::Duration,
+};
 
 const BASE_URL: &str = "https://www.soziopolis.de";
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36";
+const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
+const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_BROWSE_SECTION_WORKERS: usize = 4;
+const MAX_SECTION_PAGE_DEPTH: usize = 80;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Section {
@@ -14,7 +24,7 @@ pub struct Section {
     pub url: &'static str,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArticleSummary {
     pub url: String,
     pub title: String,
@@ -26,7 +36,7 @@ pub struct ArticleSummary {
     pub source_label: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DiscoverySourceKind {
     Section,
     Subsection,
@@ -89,6 +99,24 @@ impl DiscoveryReport {
 pub struct BrowseSectionResult {
     pub articles: Vec<ArticleSummary>,
     pub report: DiscoveryReport,
+    pub exhausted: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct SectionBrowseState {
+    pub articles: Vec<ArticleSummary>,
+    pub report: DiscoveryReport,
+    pub exhausted: bool,
+    section: Section,
+    pending_page_urls: VecDeque<String>,
+    discovered_page_urls: HashSet<String>,
+    seen_article_urls: HashSet<String>,
+    visited_page_urls: HashSet<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AllSectionsBrowseState {
+    pub section_states: Vec<SectionBrowseState>,
 }
 
 #[derive(Debug, Clone)]
@@ -96,9 +124,13 @@ pub struct Article {
     pub url: String,
     pub title: String,
     pub subtitle: String,
+    pub teaser: String,
     pub author: String,
     pub date: String,
+    pub published_at: String,
     pub section: String,
+    pub source_kind: String,
+    pub source_label: String,
     pub body_text: String,
     pub clean_text: String,
     pub word_count: usize,
@@ -176,6 +208,7 @@ pub const SECTIONS: &[Section] = &[
     },
 ];
 
+#[derive(Clone)]
 pub struct SoziopolisClient {
     client: Client,
     article_url_re: Regex,
@@ -192,6 +225,8 @@ impl SoziopolisClient {
     pub fn new() -> Result<Self> {
         let client = Client::builder()
             .user_agent(USER_AGENT)
+            .connect_timeout(HTTP_CONNECT_TIMEOUT)
+            .timeout(HTTP_TIMEOUT)
             .build()
             .context("failed to build HTTP client")?;
         let article_url_re =
@@ -215,71 +250,194 @@ impl SoziopolisClient {
         Ok(self.browse_section_detailed(section, limit)?.articles)
     }
 
+    pub fn start_section_browse(&self, section: &Section) -> Result<SectionBrowseState> {
+        let first_page_url = section.url.to_owned();
+        let first_page_html = self.fetch_html(&first_page_url)?;
+        let first_page_document = Html::parse_document(&first_page_html);
+        let mut articles = Vec::new();
+        let mut seen_article_urls = HashSet::new();
+        let mut report = DiscoveryReport::default();
+
+        report.record_source_visit(DiscoverySourceKind::Section);
+        self.collect_articles_from_document(
+            &first_page_document,
+            Some(section.label),
+            &first_page_url,
+            DiscoverySourceKind::Section,
+            usize::MAX,
+            &mut seen_article_urls,
+            &mut articles,
+            &mut report,
+        );
+
+        let pending_page_urls =
+            section_page_urls(section, &first_page_html, MAX_SECTION_PAGE_DEPTH)
+                .into_iter()
+                .collect::<VecDeque<_>>();
+        let discovered_page_urls = pending_page_urls.iter().cloned().collect::<HashSet<_>>();
+        let mut visited_page_urls = HashSet::new();
+        visited_page_urls.insert(first_page_url);
+
+        Ok(SectionBrowseState {
+            articles,
+            report,
+            exhausted: pending_page_urls.is_empty(),
+            section: *section,
+            pending_page_urls,
+            discovered_page_urls,
+            seen_article_urls,
+            visited_page_urls,
+        })
+    }
+
+    pub fn grow_section_browse(
+        &self,
+        state: &mut SectionBrowseState,
+        target_limit: usize,
+    ) -> Result<()> {
+        let target_limit = target_limit.max(state.articles.len());
+        let max_pages = desired_section_page_count(target_limit);
+
+        while state.articles.len() < target_limit {
+            let Some(page_url) = state.pending_page_urls.pop_front() else {
+                state.exhausted = true;
+                break;
+            };
+
+            if state.visited_page_urls.len() >= max_pages {
+                state.exhausted = state.pending_page_urls.is_empty();
+                break;
+            }
+            if !state.visited_page_urls.insert(page_url.clone()) {
+                continue;
+            }
+
+            let html = self.fetch_html(&page_url)?;
+            let document = Html::parse_document(&html);
+            state
+                .report
+                .record_source_visit(DiscoverySourceKind::Section);
+            self.collect_articles_from_document(
+                &document,
+                Some(state.section.label),
+                &page_url,
+                DiscoverySourceKind::Section,
+                target_limit,
+                &mut state.seen_article_urls,
+                &mut state.articles,
+                &mut state.report,
+            );
+
+            for discovered_url in
+                extract_paginated_section_urls(&state.section, &html, MAX_SECTION_PAGE_DEPTH)
+            {
+                if state.discovered_page_urls.insert(discovered_url.clone()) {
+                    state.pending_page_urls.push_back(discovered_url);
+                }
+            }
+        }
+
+        if state.pending_page_urls.is_empty() {
+            state.exhausted = true;
+        }
+
+        Ok(())
+    }
+
     pub fn browse_section_detailed(
         &self,
         section: &Section,
         limit: usize,
     ) -> Result<BrowseSectionResult> {
-        let mut articles = Vec::new();
-        let mut seen = HashSet::new();
-        let mut report = DiscoveryReport::default();
-        let page_urls = section_page_urls(section, limit);
+        let mut state = self.start_section_browse(section)?;
+        self.grow_section_browse(&mut state, limit)?;
 
-        for page_url in page_urls {
-            if articles.len() >= limit {
-                break;
-            }
-
-            let html = self.fetch_html(&page_url)?;
-            let document = Html::parse_document(&html);
-            report.record_source_visit(DiscoverySourceKind::Section);
-            self.collect_articles_from_document(
-                &document,
-                Some(section.label),
-                &page_url,
-                DiscoverySourceKind::Section,
-                limit,
-                &mut seen,
-                &mut articles,
-                &mut report,
-            );
-        }
-
-        Ok(BrowseSectionResult { articles, report })
+        Ok(BrowseSectionResult {
+            articles: state.articles,
+            report: state.report,
+            exhausted: state.exhausted,
+        })
     }
 
     pub fn browse_all_sections_detailed(&self, total_limit: usize) -> Result<BrowseSectionResult> {
-        let mut merged_articles = Vec::new();
-        let mut merged_report = DiscoveryReport::default();
-        let mut seen = HashSet::new();
-        let section_count = self.sections().len().max(1);
-        let per_section_limit = total_limit.div_ceil(section_count).clamp(8, 20);
+        let mut state = self.start_all_sections_browse()?;
+        self.grow_all_sections_browse(&mut state, total_limit)
+    }
 
-        for section in self.sections() {
-            if merged_articles.len() >= total_limit {
-                break;
+    pub fn start_all_sections_browse(&self) -> Result<AllSectionsBrowseState> {
+        let worker_count = browse_section_worker_count(self.sections().len().max(1));
+        let mut ordered_states = Vec::new();
+
+        for chunk in self.sections().chunks(worker_count) {
+            let (tx, rx) = mpsc::channel();
+            thread::scope(|scope| {
+                for (offset, section) in chunk.iter().enumerate() {
+                    let tx = tx.clone();
+                    let scraper = self.clone();
+                    let section = *section;
+                    scope.spawn(move || {
+                        let result = scraper.start_section_browse(&section);
+                        let _ = tx.send((offset, result));
+                    });
+                }
+            });
+            drop(tx);
+
+            let mut chunk_results = Vec::new();
+            while let Ok((offset, result)) = rx.recv() {
+                chunk_results.push((offset, result?));
             }
+            chunk_results.sort_by_key(|(offset, _)| *offset);
+            ordered_states.extend(chunk_results.into_iter().map(|(_, state)| state));
+        }
 
-            let section_result = self.browse_section_detailed(section, per_section_limit)?;
-            merged_report.merge(&section_result.report);
+        Ok(AllSectionsBrowseState {
+            section_states: ordered_states,
+        })
+    }
 
-            for article in section_result.articles {
-                if merged_articles.len() >= total_limit {
-                    break;
+    pub fn grow_all_sections_browse(
+        &self,
+        state: &mut AllSectionsBrowseState,
+        total_limit: usize,
+    ) -> Result<BrowseSectionResult> {
+        let section_count = state.section_states.len().max(1);
+        let per_section_limit = total_limit.div_ceil(section_count).clamp(8, 20);
+        let worker_count = browse_section_worker_count(section_count);
+
+        for chunk in state
+            .section_states
+            .iter()
+            .cloned()
+            .enumerate()
+            .collect::<Vec<_>>()
+            .chunks(worker_count)
+        {
+            let (tx, rx) = mpsc::channel();
+            thread::scope(|scope| {
+                for (index, section_state) in chunk.iter().cloned() {
+                    let tx = tx.clone();
+                    let scraper = self.clone();
+                    scope.spawn(move || {
+                        let mut section_state = section_state;
+                        let result = scraper
+                            .grow_section_browse(&mut section_state, per_section_limit)
+                            .map(|_| section_state);
+                        let _ = tx.send((index, result));
+                    });
                 }
+            });
+            drop(tx);
 
-                if seen.insert(article.url.clone()) {
-                    merged_articles.push(article);
-                } else {
-                    merged_report.deduped_articles += 1;
-                }
+            while let Ok((index, result)) = rx.recv() {
+                state.section_states[index] = result?;
             }
         }
 
-        Ok(BrowseSectionResult {
-            articles: merged_articles,
-            report: merged_report,
-        })
+        Ok(merge_all_sections_states(
+            &state.section_states,
+            total_limit,
+        ))
     }
 
     pub fn browse_url(
@@ -352,13 +510,19 @@ impl SoziopolisClient {
 
         let clean_text = build_clean_text(&title, &subtitle, &author, &date, &body_text);
 
+        let published_at = normalize_article_date(&date).unwrap_or_default();
+
         Ok(Article {
             url: url.to_owned(),
             title,
             subtitle,
+            teaser: String::new(),
             author,
             date,
+            published_at,
             section,
+            source_kind: "article".to_owned(),
+            source_label: source_label(url),
             body_text,
             clean_text,
             word_count,
@@ -466,10 +630,83 @@ impl SoziopolisClient {
     }
 }
 
-fn section_page_urls(section: &Section, limit: usize) -> Vec<String> {
-    let page_count = limit.max(20).div_ceil(10).clamp(1, 6);
-    let mut urls = vec![section.url.to_owned()];
-    for page in 1..page_count {
+fn section_page_urls(section: &Section, first_page_html: &str, limit: usize) -> Vec<String> {
+    let desired_pages = desired_section_page_count(limit);
+    let mut discovered = extract_paginated_section_urls(section, first_page_html, desired_pages);
+    if discovered.is_empty() {
+        discovered = legacy_section_page_urls(section, desired_pages);
+    }
+    discovered
+}
+
+fn desired_section_page_count(limit: usize) -> usize {
+    limit.max(20).div_ceil(10).clamp(1, MAX_SECTION_PAGE_DEPTH)
+}
+
+fn extract_paginated_section_urls(
+    section: &Section,
+    html: &str,
+    desired_pages: usize,
+) -> Vec<String> {
+    let selector = match Selector::parse("a[href]") {
+        Ok(selector) => selector,
+        Err(_) => return Vec::new(),
+    };
+    let document = Html::parse_document(html);
+    let section_path = section.url.trim_start_matches(BASE_URL);
+    let page_re = match Regex::new(r"page%5D=(\d+)") {
+        Ok(regex) => regex,
+        Err(_) => return Vec::new(),
+    };
+    let mut seen = HashSet::new();
+    let mut paginated = Vec::new();
+
+    for link in document.select(&selector) {
+        let Some(href) = link.value().attr("href") else {
+            continue;
+        };
+        let href = href.replace("&amp;", "&");
+        if !href.contains("page%5D=") || !href.contains("controller%5D=Search") {
+            continue;
+        }
+        if !href.starts_with(section_path) && !href.starts_with(section.url) {
+            continue;
+        }
+
+        let Some(page_number) = page_re
+            .captures(&href)
+            .and_then(|captures| captures.get(1))
+            .and_then(|capture| capture.as_str().parse::<usize>().ok())
+        else {
+            continue;
+        };
+
+        if page_number <= 1 {
+            continue;
+        }
+
+        let normalized_url = if href.starts_with("http") {
+            href
+        } else {
+            format!("{BASE_URL}{href}")
+        };
+
+        if seen.insert(page_number) {
+            paginated.push((page_number, normalized_url));
+        }
+    }
+
+    paginated.sort_by_key(|(page_number, _)| *page_number);
+    paginated
+        .into_iter()
+        .take(desired_pages.saturating_sub(1))
+        .map(|(_, url)| url)
+        .collect()
+}
+
+fn legacy_section_page_urls(section: &Section, desired_pages: usize) -> Vec<String> {
+    let mut urls = Vec::new();
+    for page in 2..=desired_pages {
         if section.url.contains('?') {
             urls.push(format!(
                 "{}&listArticles12%5Bcontroller%5D=Search&listArticles12%5Bpage%5D={page}",
@@ -793,6 +1030,24 @@ fn build_clean_text(title: &str, subtitle: &str, author: &str, date: &str, body:
     pieces.join("\n")
 }
 
+pub fn normalize_article_date(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    for format in ["%d.%m.%Y", "%Y-%m-%d"] {
+        if let Ok(date) = chrono::NaiveDate::parse_from_str(trimmed, format) {
+            return Some(date.format("%Y-%m-%d").to_string());
+        }
+    }
+
+    trimmed
+        .get(..10)
+        .and_then(|prefix| chrono::NaiveDate::parse_from_str(prefix, "%Y-%m-%d").ok())
+        .map(|date| date.format("%Y-%m-%d").to_string())
+}
+
 fn normalize_body_for_lingq(body: &str, title: &str, subtitle: &str) -> String {
     let mut cleaned_blocks = Vec::new();
     for raw_block in body.split("\n\n") {
@@ -928,6 +1183,42 @@ fn trim_chars(input: &str, max: usize) -> String {
     input.chars().take(max).collect()
 }
 
+fn browse_section_worker_count(section_count: usize) -> usize {
+    section_count.clamp(1, MAX_BROWSE_SECTION_WORKERS)
+}
+
+fn merge_all_sections_states(
+    section_states: &[SectionBrowseState],
+    total_limit: usize,
+) -> BrowseSectionResult {
+    let mut merged_articles = Vec::new();
+    let mut merged_report = DiscoveryReport::default();
+    let mut seen = HashSet::new();
+
+    for section_state in section_states {
+        merged_report.merge(&section_state.report);
+        for article in &section_state.articles {
+            if merged_articles.len() >= total_limit {
+                break;
+            }
+            if seen.insert(article.url.clone()) {
+                merged_articles.push(article.clone());
+            } else {
+                merged_report.deduped_articles += 1;
+            }
+        }
+        if merged_articles.len() >= total_limit {
+            break;
+        }
+    }
+
+    BrowseSectionResult {
+        articles: merged_articles,
+        report: merged_report,
+        exhausted: section_states.iter().all(|state| state.exhausted),
+    }
+}
+
 fn iso_timestamp_now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let now = SystemTime::now()
@@ -1014,5 +1305,170 @@ mod tests {
         assert_eq!(articles[1].date, "17.02.2026");
         assert!(articles[1].teaser.contains("Selbstvermessung"));
         Ok(())
+    }
+
+    #[test]
+    fn real_essay_listing_fixture_preserves_author_date_and_teaser() -> Result<()> {
+        let client = SoziopolisClient::new()?;
+        let document = Html::parse_document(include_str!(
+            "../tests/fixtures/soziopolis_real_essay_listing_fixture.html"
+        ));
+
+        let mut seen = HashSet::new();
+        let mut articles = Vec::new();
+        let mut report = DiscoveryReport::default();
+
+        client.collect_articles_from_document(
+            &document,
+            Some("Essays"),
+            "https://www.soziopolis.de/texte/essay.html",
+            DiscoverySourceKind::Section,
+            10,
+            &mut seen,
+            &mut articles,
+            &mut report,
+        );
+
+        assert!(articles.len() >= 2);
+        assert_eq!(articles[0].title, "Buchempfehlungen zum Frühling");
+        assert_eq!(articles[0].date, "10.04.2026");
+        assert!(articles[0].author.contains("Stephanie Kappacher"));
+        assert!(articles[0].teaser.contains("Lektüretipps"));
+        Ok(())
+    }
+
+    #[test]
+    fn real_interview_listing_fixture_preserves_article_metadata() -> Result<()> {
+        let client = SoziopolisClient::new()?;
+        let document = Html::parse_document(include_str!(
+            "../tests/fixtures/soziopolis_real_interview_listing_fixture.html"
+        ));
+
+        let mut seen = HashSet::new();
+        let mut articles = Vec::new();
+        let mut report = DiscoveryReport::default();
+
+        client.collect_articles_from_document(
+            &document,
+            Some("Interviews"),
+            "https://www.soziopolis.de/texte/interview.html",
+            DiscoverySourceKind::Section,
+            10,
+            &mut seen,
+            &mut articles,
+            &mut report,
+        );
+
+        assert!(articles.len() >= 2);
+        assert_eq!(
+            articles[0].title,
+            "„Tierrechte sind juridische Bauchrednerei“"
+        );
+        assert_eq!(articles[0].date, "04.03.2026");
+        assert_eq!(articles[0].section, "Interview");
+        assert!(articles[0].author.contains("Gonzalo Haefner"));
+        Ok(())
+    }
+
+    #[test]
+    fn section_page_urls_expand_with_higher_limits() {
+        let html = r#"
+            <html><body>
+                <a href="/texte/interview.html?listArticles13%5Bcontroller%5D=Search&amp;listArticles13%5Bpage%5D=1&amp;cHash=aaa">1</a>
+                <a href="/texte/interview.html?listArticles13%5Bcontroller%5D=Search&amp;listArticles13%5Bpage%5D=2&amp;cHash=bbb">2</a>
+                <a href="/texte/interview.html?listArticles13%5Bcontroller%5D=Search&amp;listArticles13%5Bpage%5D=3&amp;cHash=ccc">3</a>
+                <a href="/texte/interview.html?listArticles13%5Bcontroller%5D=Search&amp;listArticles13%5Bpage%5D=4&amp;cHash=ddd">4</a>
+                <a href="/texte/interview.html?listArticles13%5Bcontroller%5D=Search&amp;listArticles13%5Bpage%5D=5&amp;cHash=eee">5</a>
+                <a href="/texte/interview.html?listArticles13%5Bcontroller%5D=Search&amp;listArticles13%5Bpage%5D=6&amp;cHash=fff">6</a>
+                <a href="/texte/interview.html?listArticles13%5Bcontroller%5D=Search&amp;listArticles13%5Bpage%5D=7&amp;cHash=ggg">7</a>
+            </body></html>
+        "#;
+        let urls = section_page_urls(&SECTIONS[3], html, 80);
+        assert_eq!(urls.len(), 6);
+        assert!(urls[0].contains("listArticles13%5Bpage%5D=2"));
+        assert!(urls[0].contains("cHash="));
+    }
+
+    #[test]
+    fn deeper_interview_fixture_discovers_later_pages() {
+        let html = include_str!("../tests/fixtures/soziopolis_real_interview_page10_fixture.html");
+        let urls = extract_paginated_section_urls(&SECTIONS[3], html, 20);
+        assert!(urls.iter().any(|url| url.contains("page%5D=11")));
+        assert!(urls.iter().any(|url| url.contains("page%5D=12")));
+        assert!(urls.iter().any(|url| url.contains("page%5D=13")));
+    }
+
+    #[test]
+    fn merge_all_sections_states_marks_exhausted_only_when_every_section_is_done() {
+        let state_a = SectionBrowseState {
+            articles: vec![ArticleSummary {
+                url: "https://example.com/a".to_owned(),
+                title: "A".to_owned(),
+                teaser: String::new(),
+                author: String::new(),
+                date: String::new(),
+                section: "Essay".to_owned(),
+                source_kind: DiscoverySourceKind::Section,
+                source_label: "Essays".to_owned(),
+            }],
+            report: DiscoveryReport::default(),
+            exhausted: true,
+            section: SECTIONS[1],
+            pending_page_urls: VecDeque::new(),
+            discovered_page_urls: HashSet::new(),
+            seen_article_urls: HashSet::new(),
+            visited_page_urls: HashSet::new(),
+        };
+        let state_b = SectionBrowseState {
+            articles: vec![ArticleSummary {
+                url: "https://example.com/b".to_owned(),
+                title: "B".to_owned(),
+                teaser: String::new(),
+                author: String::new(),
+                date: String::new(),
+                section: "Interview".to_owned(),
+                source_kind: DiscoverySourceKind::Section,
+                source_label: "Interviews".to_owned(),
+            }],
+            report: DiscoveryReport::default(),
+            exhausted: false,
+            section: SECTIONS[3],
+            pending_page_urls: VecDeque::from([String::from("https://example.com/page2")]),
+            discovered_page_urls: HashSet::new(),
+            seen_article_urls: HashSet::new(),
+            visited_page_urls: HashSet::new(),
+        };
+
+        let merged = merge_all_sections_states(&[state_a.clone(), state_b.clone()], 20);
+        assert_eq!(merged.articles.len(), 2);
+        assert!(!merged.exhausted);
+
+        let merged_exhausted = merge_all_sections_states(
+            &[
+                state_a,
+                SectionBrowseState {
+                    exhausted: true,
+                    ..state_b
+                },
+            ],
+            20,
+        );
+        assert!(merged_exhausted.exhausted);
+    }
+
+    #[test]
+    fn browse_section_worker_count_is_bounded() {
+        assert_eq!(browse_section_worker_count(0), 1);
+        assert_eq!(browse_section_worker_count(1), 1);
+        assert_eq!(browse_section_worker_count(3), 3);
+        assert_eq!(browse_section_worker_count(20), 4);
+    }
+
+    #[test]
+    fn desired_section_page_count_scales_but_stays_bounded() {
+        assert_eq!(desired_section_page_count(0), 2);
+        assert_eq!(desired_section_page_count(80), 8);
+        assert_eq!(desired_section_page_count(160), 16);
+        assert_eq!(desired_section_page_count(5000), 80);
     }
 }

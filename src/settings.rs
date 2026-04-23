@@ -9,8 +9,6 @@ pub struct AppSettings {
     pub browse_section: String,
     #[serde(default)]
     pub browse_only_new: bool,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub lingq_api_key: String,
     pub lingq_collection_id: Option<i64>,
 }
 
@@ -20,7 +18,6 @@ impl Default for AppSettings {
             last_view: "browse".to_owned(),
             browse_section: "essays".to_owned(),
             browse_only_new: true,
-            lingq_api_key: String::new(),
             lingq_collection_id: None,
         }
     }
@@ -63,24 +60,6 @@ impl SettingsStore {
 
     pub fn data(&self) -> &AppSettings {
         &self.data
-    }
-
-    pub fn legacy_lingq_api_key(&self) -> Option<String> {
-        let api_key = self.data.lingq_api_key.trim();
-        if api_key.is_empty() {
-            None
-        } else {
-            Some(api_key.to_owned())
-        }
-    }
-
-    pub fn clear_legacy_lingq_api_key(&mut self) -> Result<()> {
-        if self.data.lingq_api_key.is_empty() {
-            return Ok(());
-        }
-
-        self.data.lingq_api_key.clear();
-        self.save()
     }
 
     pub fn update<F>(&mut self, updater: F) -> Result<()>

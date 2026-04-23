@@ -1,5 +1,6 @@
 use crate::app_paths;
 use anyhow::{Context, Result};
+use regex::Regex;
 use std::{
     backtrace::Backtrace,
     fs::{File, OpenOptions},
@@ -13,6 +14,7 @@ use std::{
 static LOG_FILE: OnceLock<Mutex<File>> = OnceLock::new();
 static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
 static PANIC_HOOK_INSTALLED: OnceLock<()> = OnceLock::new();
+static TOKEN_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
 
 pub fn init() -> Result<PathBuf> {
     let path = app_paths::app_log_path()?;
@@ -66,7 +68,7 @@ fn write_line(level: &str, message: &str) {
     }
 
     let timestamp = timestamp_string();
-    let line = format!("[{timestamp}] [{level}] {message}\n");
+    let line = format!("[{timestamp}] [{level}] {}\n", sanitize_message(message));
 
     if let Some(file) = LOG_FILE.get() {
         if let Ok(mut guard) = file.lock() {
@@ -74,6 +76,29 @@ fn write_line(level: &str, message: &str) {
             let _ = guard.flush();
         }
     }
+}
+
+fn sanitize_message(message: &str) -> String {
+    let mut sanitized = message.to_owned();
+    for pattern in redaction_patterns() {
+        sanitized = pattern
+            .replace_all(&sanitized, "${prefix}[REDACTED]")
+            .into_owned();
+    }
+    sanitized
+}
+
+fn redaction_patterns() -> &'static [Regex] {
+    TOKEN_PATTERNS.get_or_init(|| {
+        vec![
+            Regex::new(r#"(?i)(?P<prefix>authorization\s*[:=]\s*token\s+)[A-Za-z0-9._-]+"#)
+                .expect("authorization token redaction regex"),
+            Regex::new(
+                r#"(?i)(?P<prefix>(?:api[_ -]?key|token|password)\s*[:=]\s*["']?)[^"',\s]+"#,
+            )
+            .expect("generic secret redaction regex"),
+        ]
+    })
 }
 
 fn describe_panic(panic_info: &PanicHookInfo<'_>) -> String {
@@ -102,5 +127,21 @@ fn timestamp_string() -> String {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(duration) => format!("{}.{:03}", duration.as_secs(), duration.subsec_millis()),
         Err(_) => "time-error".to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_message;
+
+    #[test]
+    fn sanitize_message_redacts_common_secret_patterns() {
+        let message = "Authorization: Token abc123 password=secret api_key:\"xyz\" token=mytoken";
+        let sanitized = sanitize_message(message);
+        assert!(!sanitized.contains("abc123"));
+        assert!(!sanitized.contains("secret"));
+        assert!(!sanitized.contains("xyz"));
+        assert!(!sanitized.contains("mytoken"));
+        assert!(sanitized.contains("[REDACTED]"));
     }
 }

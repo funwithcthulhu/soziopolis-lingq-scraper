@@ -76,7 +76,7 @@ That refreshes the portable app folders and Desktop shortcut. The portable copy 
 
 - the local article database
 - settings
-- queue state
+- queue and job history in SQLite
 - logs
 - diagnostics support bundles
 
@@ -118,7 +118,6 @@ Soziopolis Reader.exe
 data/
   soziopolis_lingq_tool/
     settings.json
-    queue_state.json
     soziopolis_lingq_tool.db
     logs/
       soziopolis-reader.log
@@ -130,9 +129,9 @@ On Windows, LingQ tokens are stored in Windows Credential Manager rather than `s
 That means a portable folder carries the library and app settings, but LingQ will need to be
 reconnected once on each new PC.
 
-Queued import/upload jobs, recent job history, and retry lists are persisted in `queue_state.json`.
+Queued import/upload jobs, recent job history, and retry lists are persisted inside the SQLite database.
 The Diagnostics screen can also generate a timestamped support bundle folder with logs, settings,
-queue state, and a diagnostic summary for troubleshooting.
+an exported queue snapshot, and a diagnostic summary for troubleshooting.
 Queue execution can be paused and resumed from Diagnostics, and you can force-start the next
 queued LingQ upload without resuming the whole queue.
 
