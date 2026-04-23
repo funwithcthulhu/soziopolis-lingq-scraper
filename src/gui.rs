@@ -21,8 +21,8 @@ use crate::{
 };
 use chrono::NaiveDate;
 use eframe::egui::{
-    self, Align, Color32, Context, Frame, Layout, Margin, ProgressBar, RichText, ScrollArea,
-    SidePanel, Stroke, TextEdit, TopBottomPanel, ViewportBuilder,
+    self, Align, Color32, Context, Frame, Layout, Margin, Panel, ProgressBar, RichText,
+    ScrollArea, Stroke, TextEdit, ViewportBuilder,
 };
 use std::{
     any::Any,

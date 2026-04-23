@@ -1,15 +1,15 @@
 use super::*;
 
 impl SoziopolisLingqGui {
-    pub(super) fn render_sidebar(&mut self, ctx: &Context) {
-        SidePanel::left("sidebar")
-            .exact_width(240.0)
+    pub(super) fn render_sidebar(&mut self, ui: &mut egui::Ui) {
+        Panel::left("sidebar")
+            .exact_size(240.0)
             .frame(
                 Frame::default()
                     .fill(Color32::from_rgb(24, 28, 37))
                     .inner_margin(Margin::same(16)),
             )
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 ui.heading(RichText::new("Soziopolis Reader").size(24.0).strong());
                 ui.label(RichText::new("soziopolis.de + LingQ").color(Color32::from_gray(160)));
                 ui.add_space(20.0);
@@ -127,10 +127,10 @@ impl SoziopolisLingqGui {
             });
     }
 
-    pub(super) fn render_top_notice(&mut self, ctx: &Context) {
-        TopBottomPanel::top("top_notice")
-            .exact_height(if self.notice.is_some() { 36.0 } else { 0.0 })
-            .show(ctx, |ui| {
+    pub(super) fn render_top_notice(&mut self, ui: &mut egui::Ui) {
+        Panel::top("top_notice")
+            .exact_size(if self.notice.is_some() { 36.0 } else { 0.0 })
+            .show_inside(ui, |ui| {
                 if let Some(notice) = &self.notice {
                     let color = match notice.kind {
                         NoticeKind::Info => Color32::from_rgb(92, 135, 255),
@@ -813,22 +813,22 @@ impl SoziopolisLingqGui {
         });
     }
 
-    pub(super) fn render_preview_drawer(&mut self, ctx: &Context) {
+    pub(super) fn render_preview_drawer(&mut self, ui: &mut egui::Ui) {
         if !self.show_preview || self.current_view == View::Article {
             return;
         }
 
         let mut open_full_article = None;
-        SidePanel::right("preview_drawer")
-            .default_width(400.0)
-            .min_width(320.0)
+        Panel::right("preview_drawer")
+            .default_size(400.0)
+            .min_size(320.0)
             .resizable(true)
             .frame(
                 Frame::default()
                     .fill(Color32::from_rgb(18, 22, 30))
                     .inner_margin(Margin::same(16)),
             )
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.heading("Preview");
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
