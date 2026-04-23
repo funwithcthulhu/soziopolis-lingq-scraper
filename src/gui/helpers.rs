@@ -531,6 +531,21 @@ pub(super) fn job_timestamp_now() -> String {
         .unwrap_or_else(|_| "0".to_owned())
 }
 
+pub(super) fn format_job_timestamp(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return "Unknown time".to_owned();
+    }
+
+    if let Ok(epoch_seconds) = trimmed.parse::<i64>() {
+        if let Some(timestamp) = chrono::DateTime::from_timestamp(epoch_seconds, 0) {
+            return timestamp.format("%Y-%m-%d %H:%M:%S UTC").to_string();
+        }
+    }
+
+    trimmed.to_owned()
+}
+
 pub(super) fn parse_optional_positive_usize_input(
     value: &str,
     label: &str,

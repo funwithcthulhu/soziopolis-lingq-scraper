@@ -101,6 +101,7 @@ impl SoziopolisLingqGui {
             queued_jobs: VecDeque::new(),
             completed_jobs: VecDeque::new(),
             last_failed_uploads: Vec::new(),
+            diagnostics_selected_job_id: None,
         };
         app.load_persisted_queue_state();
         app.refresh_browse();

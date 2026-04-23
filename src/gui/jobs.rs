@@ -23,9 +23,10 @@ impl SoziopolisLingqGui {
                 self.completed_jobs = snapshot.completed_jobs.into();
                 self.failed_fetches = snapshot.failed_fetches;
                 self.last_failed_uploads = snapshot.failed_uploads;
-                if let Ok(history) = repository.list_completed_job_history(10) {
+                if let Ok(history) = repository.list_completed_job_history(25) {
                     self.completed_jobs = history.into();
                 }
+                self.diagnostics_selected_job_id = self.completed_jobs.front().map(|job| job.id);
                 if !self.queued_jobs.is_empty() {
                     logging::info(format!(
                         "restored {} queued job(s) from SQLite",
@@ -303,7 +304,8 @@ impl SoziopolisLingqGui {
             recorded_at: job_timestamp_now(),
         };
         self.completed_jobs.push_front(completed_job.clone());
-        while self.completed_jobs.len() > 10 {
+        self.diagnostics_selected_job_id = Some(completed_job.id);
+        while self.completed_jobs.len() > 25 {
             self.completed_jobs.pop_back();
         }
         if let Ok(mut database) = Database::open_default() {

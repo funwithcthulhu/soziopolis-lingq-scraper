@@ -82,6 +82,29 @@ impl SoziopolisLingqGui {
         });
 
         ui.add_space(10.0);
+        self.render_jobs_diagnostics_panel(ui);
+
+        ui.add_space(10.0);
+        self.render_failure_diagnostics_panel(ui);
+
+        ui.add_space(10.0);
+        framed_panel(ui, |ui| {
+            ui.label(RichText::new("Recent log excerpt").strong());
+            ui.add_space(6.0);
+            match read_recent_log_excerpt(18) {
+                Ok(text) => {
+                    ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                        ui.code(text);
+                    });
+                }
+                Err(err) => {
+                    ui.small(RichText::new(err).color(Color32::from_rgb(238, 100, 100)));
+                }
+            }
+        });
+    }
+
+    fn render_jobs_diagnostics_panel(&mut self, ui: &mut egui::Ui) {
         framed_panel(ui, |ui| {
             ui.label(RichText::new("Jobs").strong());
             ui.add_space(6.0);
@@ -127,6 +150,7 @@ impl SoziopolisLingqGui {
                     }
                 ));
                 ui.label(format!("Queued jobs: {}", self.queued_jobs.len()));
+                ui.label(format!("Stored history: {}", self.completed_jobs.len()));
                 if ui
                     .add_enabled(!self.queue_paused, egui::Button::new("Pause queue"))
                     .clicked()
@@ -163,6 +187,111 @@ impl SoziopolisLingqGui {
                     self.persist_queue_state();
                     self.set_notice("Cleared queued jobs.", NoticeKind::Info);
                 }
+            });
+
+            if !self.queued_jobs.is_empty() {
+                ui.add_space(8.0);
+                ui.label(RichText::new("Queue").strong());
+                for job in self.queued_jobs.iter().take(10) {
+                    ui.small(format!(
+                        "#{} {} ({}){}",
+                        job.id,
+                        job.label,
+                        job.kind.label(),
+                        if self.queue_paused
+                            && matches!(job.request, QueuedJobRequest::Upload { .. })
+                        {
+                            " [waiting]"
+                        } else {
+                            ""
+                        }
+                    ));
+                }
+            }
+
+            ui.add_space(10.0);
+            ui.label(RichText::new("Job history").strong());
+            ui.small(
+                RichText::new("Select a recent job to inspect its summary and timestamp.")
+                    .color(Color32::from_gray(160)),
+            );
+            ui.add_space(6.0);
+
+            if self.completed_jobs.is_empty() {
+                ui.small(
+                    RichText::new("No completed jobs have been recorded yet.")
+                        .color(Color32::from_gray(150)),
+                );
+                return;
+            }
+
+            if self
+                .diagnostics_selected_job_id
+                .is_none_or(|job_id| !self.completed_jobs.iter().any(|job| job.id == job_id))
+            {
+                self.diagnostics_selected_job_id = self.completed_jobs.front().map(|job| job.id);
+            }
+
+            ui.columns(2, |columns| {
+                columns[0].set_min_width(320.0);
+                ScrollArea::vertical()
+                    .max_height(280.0)
+                    .show(&mut columns[0], |ui| {
+                        for job in self.completed_jobs.iter().take(25) {
+                            let selected = self.diagnostics_selected_job_id == Some(job.id);
+                            let label = format!(
+                                "#{} {} [{}]",
+                                job.id,
+                                truncate_for_ui(&job.label, 34),
+                                if job.success { "ok" } else { "issue" }
+                            );
+                            if ui.selectable_label(selected, label).clicked() {
+                                self.diagnostics_selected_job_id = Some(job.id);
+                            }
+                            ui.small(
+                                RichText::new(format_job_timestamp(&job.recorded_at))
+                                    .color(Color32::from_gray(150)),
+                            );
+                            ui.add_space(4.0);
+                        }
+                    });
+
+                if let Some(selected_job) = self
+                    .diagnostics_selected_job_id
+                    .and_then(|job_id| self.completed_jobs.iter().find(|job| job.id == job_id))
+                {
+                    framed_panel(&mut columns[1], |ui| {
+                        ui.label(RichText::new(&selected_job.label).strong());
+                        ui.add_space(4.0);
+                        ui.horizontal_wrapped(|ui| {
+                            tag(ui, selected_job.kind.label());
+                            if selected_job.success {
+                                success_tag(ui, "Successful");
+                            } else {
+                                tag(ui, "Finished with issues");
+                            }
+                            tag(ui, &format!("Job #{}", selected_job.id));
+                        });
+                        ui.add_space(6.0);
+                        ui.small(format!(
+                            "Completed: {}",
+                            format_job_timestamp(&selected_job.recorded_at)
+                        ));
+                        ui.add_space(8.0);
+                        ui.label(RichText::new("Summary").strong());
+                        ui.add_space(4.0);
+                        ui.label(&selected_job.summary);
+                    });
+                }
+            });
+        });
+    }
+
+    fn render_failure_diagnostics_panel(&mut self, ui: &mut egui::Ui) {
+        framed_panel(ui, |ui| {
+            ui.label(RichText::new("Retained failures").strong());
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
                 if ui
                     .add_enabled(
                         !self.failed_fetches.is_empty(),
@@ -182,62 +311,71 @@ impl SoziopolisLingqGui {
                     self.retry_failed_uploads();
                 }
             });
-
-            if !self.queued_jobs.is_empty() {
-                ui.add_space(6.0);
-                ui.label(RichText::new("Queue").strong());
-                for job in self.queued_jobs.iter().take(6) {
-                    ui.small(format!(
-                        "#{} {} ({}){}",
-                        job.id,
-                        job.label,
-                        job.kind.label(),
-                        if self.queue_paused
-                            && matches!(job.request, QueuedJobRequest::Upload { .. })
-                        {
-                            " [waiting]"
+            ui.add_space(8.0);
+            ui.columns(2, |columns| {
+                columns[0].label(RichText::new("Import failures").strong());
+                columns[0].small(format!("{} retained item(s)", self.failed_fetches.len()));
+                ScrollArea::vertical()
+                    .max_height(220.0)
+                    .show(&mut columns[0], |ui| {
+                        if self.failed_fetches.is_empty() {
+                            ui.small(
+                                RichText::new("No retained import failures.")
+                                    .color(Color32::from_gray(150)),
+                            );
                         } else {
-                            ""
+                            for item in &self.failed_fetches {
+                                ui.small(RichText::new(format!(
+                                    "[{}] {}",
+                                    item.category,
+                                    if item.title.is_empty() {
+                                        &item.url
+                                    } else {
+                                        &item.title
+                                    }
+                                )));
+                                ui.small(
+                                    RichText::new(truncate_for_ui(&item.message, 140))
+                                        .color(Color32::from_gray(155)),
+                                );
+                                ui.add_space(6.0);
+                            }
                         }
-                    ));
-                }
-            }
-
-            if !self.completed_jobs.is_empty() {
-                ui.add_space(8.0);
-                ui.label(RichText::new("Recent jobs").strong());
-                for job in self.completed_jobs.iter().take(8) {
-                    ui.small(format!(
-                        "#{} {} ({}) [{}] {}{}",
-                        job.id,
-                        job.label,
-                        job.kind.label(),
-                        if job.success { "ok" } else { "issue" },
-                        job.summary,
-                        if job.recorded_at.is_empty() {
-                            String::new()
-                        } else {
-                            format!(" @ {}", job.recorded_at)
-                        }
-                    ));
-                }
-            }
-        });
-
-        ui.add_space(10.0);
-        framed_panel(ui, |ui| {
-            ui.label(RichText::new("Recent log excerpt").strong());
-            ui.add_space(6.0);
-            match read_recent_log_excerpt(18) {
-                Ok(text) => {
-                    ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
-                        ui.code(text);
                     });
-                }
-                Err(err) => {
-                    ui.small(RichText::new(err).color(Color32::from_rgb(238, 100, 100)));
-                }
-            }
+
+                columns[1].label(RichText::new("Upload failures").strong());
+                columns[1].small(format!(
+                    "{} retained item(s)",
+                    self.last_failed_uploads.len()
+                ));
+                ScrollArea::vertical()
+                    .max_height(220.0)
+                    .show(&mut columns[1], |ui| {
+                        if self.last_failed_uploads.is_empty() {
+                            ui.small(
+                                RichText::new("No retained upload failures.")
+                                    .color(Color32::from_gray(150)),
+                            );
+                        } else {
+                            for item in &self.last_failed_uploads {
+                                ui.small(RichText::new(format!(
+                                    "#{} {}",
+                                    item.article_id,
+                                    if item.title.is_empty() {
+                                        "Upload item"
+                                    } else {
+                                        &item.title
+                                    }
+                                )));
+                                ui.small(
+                                    RichText::new(truncate_for_ui(&item.message, 140))
+                                        .color(Color32::from_gray(155)),
+                                );
+                                ui.add_space(6.0);
+                            }
+                        }
+                    });
+            });
         });
     }
 }
