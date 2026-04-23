@@ -7,23 +7,27 @@ impl SoziopolisLingqGui {
     }
 
     pub(super) fn load_persisted_queue_state(&mut self) {
-        let mut database = match Database::open_default() {
+        let shared_db = match Database::shared_default() {
             Ok(database) => database,
             Err(err) => {
                 logging::warn(format!("could not open SQLite for queue restore: {err}"));
                 return;
             }
         };
-        let repository = JobRepository::new(&mut database);
-        match repository.load_snapshot() {
-            Ok(snapshot) => {
+        match shared_db.with_db(|database| {
+            let repository = JobRepository::new(database);
+            let snapshot = repository.load_snapshot()?;
+            let history = repository.list_completed_job_history(25).ok();
+            Ok((snapshot, history))
+        }) {
+            Ok((snapshot, history)) => {
                 self.next_job_id = self.next_job_id.max(snapshot.next_job_id);
                 self.queue_paused = snapshot.queue_paused;
                 self.queued_jobs = snapshot.queued_jobs.into();
                 self.completed_jobs = snapshot.completed_jobs.into();
                 self.failed_fetches = snapshot.failed_fetches;
                 self.last_failed_uploads = snapshot.failed_uploads;
-                if let Ok(history) = repository.list_completed_job_history(25) {
+                if let Some(history) = history {
                     self.completed_jobs = history.into();
                 }
                 self.diagnostics_selected_job_id = self.completed_jobs.front().map(|job| job.id);
@@ -55,7 +59,7 @@ impl SoziopolisLingqGui {
             failed_uploads: self.last_failed_uploads.clone(),
         };
 
-        let mut database = match Database::open_default() {
+        let shared_db = match Database::shared_default() {
             Ok(database) => database,
             Err(err) => {
                 logging::warn(format!(
@@ -64,8 +68,10 @@ impl SoziopolisLingqGui {
                 return;
             }
         };
-        let mut repository = JobRepository::new(&mut database);
-        if let Err(err) = repository.save_snapshot(&snapshot) {
+        if let Err(err) = shared_db.with_db(|database| {
+            let mut repository = JobRepository::new(database);
+            repository.save_snapshot(&snapshot)
+        }) {
             logging::warn(format!("could not persist queue state to SQLite: {err}"));
         }
     }
@@ -308,9 +314,11 @@ impl SoziopolisLingqGui {
         while self.completed_jobs.len() > 25 {
             self.completed_jobs.pop_back();
         }
-        if let Ok(mut database) = Database::open_default() {
-            let repository = JobRepository::new(&mut database);
-            if let Err(err) = repository.record_completed_job_history(&completed_job) {
+        if let Ok(shared_db) = Database::shared_default() {
+            if let Err(err) = shared_db.with_db(|database| {
+                let repository = JobRepository::new(database);
+                repository.record_completed_job_history(&completed_job)
+            }) {
                 logging::warn(format!("could not persist completed job history: {err}"));
             }
         }

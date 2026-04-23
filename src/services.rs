@@ -1,5 +1,5 @@
 use crate::{
-    database::Database,
+    database::{Database, StoredArticle},
     jobs::{FailedFetchItem, ImportProgress, UploadFailure, UploadProgress, UploadSuccess},
     lingq::{Collection, LingqClient, UploadRequest},
     repositories::ArticleRepository,
@@ -20,7 +20,8 @@ use std::{
 };
 
 const MAX_IMPORT_WORKERS: usize = 4;
-const MAX_UPLOAD_WORKERS: usize = 2;
+const DEFAULT_MAX_UPLOAD_WORKERS: usize = 2;
+const TESTED_MAX_UPLOAD_WORKERS: usize = 3;
 
 pub struct ContentRefreshResult {
     pub imported_urls: Result<HashSet<String>, String>,
@@ -30,7 +31,7 @@ pub struct ContentRefreshResult {
 
 pub struct ImportOutcome {
     pub saved_count: usize,
-    pub saved_articles: Vec<crate::database::StoredArticle>,
+    pub saved_articles: Vec<StoredArticle>,
     pub skipped_existing: usize,
     pub skipped_out_of_range: usize,
     pub failed: Vec<FailedFetchItem>,
@@ -150,15 +151,17 @@ impl BrowseService {
         mut on_progress: impl FnMut(ImportProgress),
     ) -> Result<ImportOutcome> {
         let started = Instant::now();
-        let mut db = Database::open_default()?;
-        let repository = ArticleRepository::new(&db);
         let mut saved_count = 0usize;
         let mut saved_articles = Vec::new();
         let mut skipped_existing = 0usize;
         let mut failed = Vec::new();
         let total = articles.len();
         let mut canceled = false;
-        let mut known_urls = repository.get_all_article_urls()?;
+        let shared_db = Database::shared_default()?;
+        let mut known_urls = shared_db.with_db(|db| {
+            let repository = ArticleRepository::new(db);
+            repository.get_all_article_urls()
+        })?;
         let mut processed = 0usize;
         let mut pending = Vec::new();
         let mut fetched_articles = Vec::new();
@@ -246,7 +249,7 @@ impl BrowseService {
                 current_item: "Writing articles to the local library".to_owned(),
             });
 
-            match db.save_articles_batch(&fetched_articles) {
+            match shared_db.with_db(|db| db.save_articles_batch(&fetched_articles)) {
                 Ok(mut stored_articles) => {
                     saved_count += stored_articles.len();
                     for article in &stored_articles {
@@ -259,9 +262,9 @@ impl BrowseService {
                         "batch import save failed; retrying individual article writes: {batch_err}"
                     ));
                     for article in fetched_articles {
-                        match db.save_article(&article) {
-                            Ok(_) => match db.get_article_id_by_url(&article.url) {
-                                Ok(Some(id)) => match db.get_article(id) {
+                        match shared_db.with_db(|db| db.save_article(&article)) {
+                            Ok(_) => match shared_db.with_db(|db| db.get_article_id_by_url(&article.url)) {
+                                Ok(Some(id)) => match shared_db.with_db(|db| db.get_article(id)) {
                                     Ok(Some(stored)) => {
                                         saved_count += 1;
                                         known_urls.insert(stored.url.clone());
@@ -448,7 +451,22 @@ fn import_worker_count(pending_items: usize) -> usize {
 }
 
 fn upload_worker_count(pending_items: usize) -> usize {
-    pending_items.clamp(1, MAX_UPLOAD_WORKERS)
+    pending_items.clamp(1, configured_upload_worker_cap())
+}
+
+fn configured_upload_worker_cap() -> usize {
+    configured_upload_worker_cap_from_env(
+        std::env::var("SOZIOPOLIS_LINGQ_UPLOAD_WORKERS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn configured_upload_worker_cap_from_env(value: Option<&str>) -> usize {
+    value
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_MAX_UPLOAD_WORKERS)
+        .clamp(1, TESTED_MAX_UPLOAD_WORKERS)
 }
 
 fn worker_upload_articles(
@@ -523,7 +541,7 @@ fn worker_upload_articles(
 
 #[cfg(test)]
 mod tests {
-    use super::{import_worker_count, upload_worker_count};
+    use super::{configured_upload_worker_cap_from_env, import_worker_count, upload_worker_count};
 
     #[test]
     fn import_worker_count_is_bounded() {
@@ -540,6 +558,13 @@ mod tests {
         assert_eq!(upload_worker_count(2), 2);
         assert_eq!(upload_worker_count(12), 2);
     }
+
+    #[test]
+    fn configured_upload_worker_cap_defaults_to_two() {
+        assert_eq!(configured_upload_worker_cap_from_env(None), 2);
+        assert_eq!(configured_upload_worker_cap_from_env(Some("3")), 3);
+        assert_eq!(configured_upload_worker_cap_from_env(Some("5")), 3);
+    }
 }
 
 pub struct LibraryService;
@@ -547,7 +572,7 @@ pub struct LibraryService;
 impl LibraryService {
     pub fn refresh_content() -> ContentRefreshResult {
         let started = Instant::now();
-        let db = match Database::open_default() {
+        let shared_db = match Database::shared_default() {
             Ok(db) => db,
             Err(err) => {
                 let message = err.to_string();
@@ -558,16 +583,27 @@ impl LibraryService {
                 };
             }
         };
-        let repository = ArticleRepository::new(&db);
-        let result = ContentRefreshResult {
-            imported_urls: repository
-                .get_all_article_urls()
-                .map_err(|err| err.to_string()),
-            library_articles: repository
-                .list_articles(None, None, false, 0)
-                .map_err(|err| err.to_string()),
-            library_stats: repository.get_stats().map_err(|err| err.to_string()),
-        };
+        let result = shared_db
+            .with_db(|db| {
+                let repository = ArticleRepository::new(db);
+                Ok(ContentRefreshResult {
+                    imported_urls: repository
+                        .get_all_article_urls()
+                        .map_err(|err| err.to_string()),
+                    library_articles: repository
+                        .list_articles(None, None, false, 0)
+                        .map_err(|err| err.to_string()),
+                    library_stats: repository.get_stats().map_err(|err| err.to_string()),
+                })
+            })
+            .unwrap_or_else(|err| {
+                let message = err.to_string();
+                ContentRefreshResult {
+                    imported_urls: Err(message.clone()),
+                    library_articles: Err(message.clone()),
+                    library_stats: Err(message),
+                }
+            });
         crate::logging::info(format!(
             "refresh_content completed in {:?}",
             started.elapsed()
@@ -576,15 +612,17 @@ impl LibraryService {
     }
 
     pub fn delete_article(id: i64) -> Result<()> {
-        let db = Database::open_default()?;
-        let repository = ArticleRepository::new(&db);
-        repository.delete_article(id)
+        Database::shared_default()?.with_db(|db| {
+            let repository = ArticleRepository::new(db);
+            repository.delete_article(id)
+        })
     }
 
-    pub fn get_article(id: i64) -> Result<Option<crate::database::StoredArticle>> {
-        let db = Database::open_default()?;
-        let repository = ArticleRepository::new(&db);
-        repository.get_article(id)
+    pub fn get_article(id: i64) -> Result<Option<StoredArticle>> {
+        Database::shared_default()?.with_db(|db| {
+            let repository = ArticleRepository::new(db);
+            repository.get_article(id)
+        })
     }
 }
 
@@ -607,16 +645,18 @@ impl LingqService {
         mut on_progress: impl FnMut(UploadProgress),
     ) -> Result<UploadOutcome> {
         let started = Instant::now();
-        let db = Database::open_default()?;
-        let repository = ArticleRepository::new(&db);
+        let shared_db = Database::shared_default()?;
         let mut uploaded = 0usize;
         let mut successes = Vec::new();
         let mut failed = Vec::new();
         let total = ids.len();
         let mut canceled = false;
         let ordered_ids = ids;
-        let article_map = repository
-            .get_articles_by_ids(&ordered_ids)?
+        let article_map = shared_db
+            .with_db(|db| {
+                let repository = ArticleRepository::new(db);
+                repository.get_articles_by_ids(&ordered_ids)
+            })?
             .into_iter()
             .map(|article| (article.id, article))
             .collect::<HashMap<_, _>>();
@@ -646,6 +686,11 @@ impl LingqService {
         }
 
         let worker_count = upload_worker_count(queue.len());
+        crate::logging::info(format!(
+            "LingQ upload worker cap resolved to {} (pending items: {})",
+            worker_count,
+            queue.len()
+        ));
         let queue = Arc::new(Mutex::new(queue));
         let (result_tx, result_rx) = mpsc::channel();
 
@@ -673,11 +718,14 @@ impl LingqService {
                 processed += 1;
                 match result.outcome {
                     Ok(response) => {
-                        match repository.mark_uploaded(
-                            result.article.id,
-                            response.lesson_id,
-                            &response.lesson_url,
-                        ) {
+                        match shared_db.with_db(|db| {
+                            let repository = ArticleRepository::new(db);
+                            repository.mark_uploaded(
+                                result.article.id,
+                                response.lesson_id,
+                                &response.lesson_url,
+                            )
+                        }) {
                             Ok(()) => {
                                 uploaded += 1;
                                 successes.push(UploadSuccess {

@@ -186,10 +186,12 @@ impl SoziopolisLingqGui {
             self.library_articles.clone()
         } else {
             if self.library_search_cache_query != trimmed_search {
-                let database = Database::open_default().map_err(|err| err.to_string())?;
-                let repository = ArticleRepository::new(&database);
-                self.library_search_cache_results = repository
-                    .list_articles(Some(trimmed_search), None, false, 0)
+                self.library_search_cache_results = Database::shared_default()
+                    .map_err(|err| err.to_string())?
+                    .with_db(|db| {
+                        let repository = ArticleRepository::new(db);
+                        repository.list_articles(Some(trimmed_search), None, false, 0)
+                    })
                     .map_err(|err| err.to_string())?;
                 self.library_search_cache_query = trimmed_search.to_owned();
             }

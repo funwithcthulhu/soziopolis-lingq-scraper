@@ -1,13 +1,19 @@
 use crate::{
     app_paths,
     jobs::{CompletedJob, QueueSnapshot},
-    soziopolis::Article,
+    soziopolis::{Article, build_clean_text},
 };
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
-use std::{collections::HashSet, path::Path, time::Duration};
+use std::{
+    collections::HashSet,
+    path::Path,
+    sync::{Arc, Mutex, OnceLock},
+    time::Duration,
+};
 
-const CURRENT_SCHEMA_VERSION: i32 = 6;
+const CURRENT_SCHEMA_VERSION: i32 = 7;
+static SHARED_DEFAULT_DATABASE: OnceLock<SharedDatabase> = OnceLock::new();
 
 #[derive(Debug, Clone)]
 pub struct StoredArticle {
@@ -51,18 +57,63 @@ pub struct Database {
     conn: Connection,
 }
 
+#[derive(Clone)]
+pub struct SharedDatabase {
+    inner: Arc<Mutex<Database>>,
+}
+
+impl SharedDatabase {
+    pub fn open_default() -> Result<Self> {
+        Ok(Self {
+            inner: Arc::new(Mutex::new(Database::open_default()?)),
+        })
+    }
+
+    pub fn with_db<T>(&self, action: impl FnOnce(&mut Database) -> Result<T>) -> Result<T> {
+        let mut db = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("shared database mutex was poisoned"))?;
+        action(&mut db)
+    }
+}
+
 impl Database {
     pub fn open_default() -> Result<Self> {
         let db_path = app_paths::database_path()?;
         Self::open(&db_path)
     }
 
+    pub fn shared_default() -> Result<SharedDatabase> {
+        if let Some(shared) = SHARED_DEFAULT_DATABASE.get() {
+            return Ok(shared.clone());
+        }
+
+        let shared = SharedDatabase::open_default()?;
+        let _ = SHARED_DEFAULT_DATABASE.set(shared.clone());
+        Ok(SHARED_DEFAULT_DATABASE.get().cloned().unwrap_or(shared))
+    }
+
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)
             .with_context(|| format!("failed to open database {}", path.display()))?;
-        let database = Self { conn };
+        let mut database = Self { conn };
         database.configure_connection()?;
         database.migrate()?;
+        if let Ok(backfilled) = database.backfill_preview_summaries_once() {
+            if backfilled > 0 {
+                crate::logging::info(format!(
+                    "backfilled preview summaries for {backfilled} existing article(s)"
+                ));
+            }
+        }
+        if let Ok(compacted) = database.clear_duplicate_clean_text_once() {
+            if compacted > 0 {
+                crate::logging::info(format!(
+                    "cleared duplicated clean_text storage for {compacted} existing article(s)"
+                ));
+            }
+        }
         Ok(database)
     }
 
@@ -72,7 +123,7 @@ impl Database {
             r#"
             INSERT INTO articles (
                 url, title, subtitle, teaser, preview_summary, author, date, published_at, section, source_kind,
-                source_label, body_text, clean_text, word_count, fetched_at
+            source_label, body_text, clean_text, word_count, fetched_at
             )
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
             ON CONFLICT(url) DO UPDATE SET
@@ -105,7 +156,7 @@ impl Database {
             article.source_kind,
             article.source_label,
             article.body_text,
-            article.clean_text,
+            "",
             article.word_count as i64,
             article.fetched_at,
         ])?;
@@ -164,7 +215,7 @@ impl Database {
                     article.source_kind,
                     article.source_label,
                     article.body_text,
-                    article.clean_text,
+                    "",
                     article.word_count as i64,
                     article.fetched_at,
                 ])?;
@@ -190,7 +241,7 @@ impl Database {
             r#"
                 SELECT
                     id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section, source_kind,
-                    source_label, body_text, clean_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
+                    source_label, body_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
                     lingq_lesson_id, lingq_lesson_url
                 FROM articles
                 WHERE (?1 IS NULL OR id IN (
@@ -204,7 +255,7 @@ impl Database {
             r#"
                 SELECT
                     id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section, source_kind,
-                    source_label, body_text, clean_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
+                    source_label, body_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
                     lingq_lesson_id, lingq_lesson_url
                 FROM articles
                 WHERE (?1 IS NULL OR id IN (
@@ -245,7 +296,7 @@ impl Database {
             r#"
                 SELECT
                     id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section, source_kind,
-                    source_label, body_text, clean_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
+                    source_label, body_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
                     lingq_lesson_id, lingq_lesson_url
                 FROM articles
                 WHERE id = ?1
@@ -268,7 +319,7 @@ impl Database {
             r#"
             SELECT
                 id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section, source_kind,
-                source_label, body_text, clean_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
+                source_label, body_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
                 lingq_lesson_id, lingq_lesson_url
             FROM articles
             WHERE id IN ({placeholders})
@@ -293,7 +344,7 @@ impl Database {
             r#"
             SELECT
                 id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section, source_kind,
-                source_label, body_text, clean_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
+                source_label, body_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
                 lingq_lesson_id, lingq_lesson_url
             FROM articles
             WHERE url IN ({placeholders})
@@ -395,6 +446,18 @@ impl Database {
             average_word_count,
             sections,
         })
+    }
+
+    pub fn compact_storage(&mut self) -> Result<()> {
+        self.conn.execute_batch(
+            r#"
+            UPDATE articles SET clean_text = '' WHERE clean_text <> '';
+            PRAGMA wal_checkpoint(TRUNCATE);
+            VACUUM;
+            "#,
+        )?;
+        self.set_app_state("clean_text_compacted_v1", "1")?;
+        Ok(())
     }
 
     pub fn load_queue_snapshot(&self) -> Result<QueueSnapshot> {
@@ -566,10 +629,17 @@ impl Database {
         }
         if version < CURRENT_SCHEMA_VERSION {
             needs_fts_rebuild |= self.migrate_to_v6()?;
-            version = CURRENT_SCHEMA_VERSION;
+            version = 6;
             self.set_user_version(version)?;
         } else {
             needs_fts_rebuild |= self.migrate_to_v6()?;
+        }
+        if version < CURRENT_SCHEMA_VERSION {
+            needs_fts_rebuild |= self.migrate_to_v7()?;
+            version = CURRENT_SCHEMA_VERSION;
+            self.set_user_version(version)?;
+        } else {
+            needs_fts_rebuild |= self.migrate_to_v7()?;
         }
 
         self.rebuild_fts_if_needed(needs_fts_rebuild)?;
@@ -699,6 +769,40 @@ impl Database {
         self.add_column_if_missing("articles", "preview_summary", "TEXT NOT NULL DEFAULT ''")
     }
 
+    fn migrate_to_v7(&self) -> Result<bool> {
+        self.conn.execute_batch(
+            r#"
+            DROP TRIGGER IF EXISTS articles_ai;
+            DROP TRIGGER IF EXISTS articles_ad;
+            DROP TRIGGER IF EXISTS articles_au;
+            DROP TABLE IF EXISTS articles_fts;
+
+            CREATE VIRTUAL TABLE articles_fts USING fts5(
+                title, subtitle, teaser, author, section, body_text, url,
+                content='articles', content_rowid='id'
+            );
+
+            CREATE TRIGGER articles_ai AFTER INSERT ON articles BEGIN
+                INSERT INTO articles_fts(rowid, title, subtitle, teaser, author, section, body_text, url)
+                VALUES (new.id, new.title, new.subtitle, new.teaser, new.author, new.section, new.body_text, new.url);
+            END;
+
+            CREATE TRIGGER articles_ad AFTER DELETE ON articles BEGIN
+                INSERT INTO articles_fts(articles_fts, rowid, title, subtitle, teaser, author, section, body_text, url)
+                VALUES('delete', old.id, old.title, old.subtitle, old.teaser, old.author, old.section, old.body_text, old.url);
+            END;
+
+            CREATE TRIGGER articles_au AFTER UPDATE ON articles BEGIN
+                INSERT INTO articles_fts(articles_fts, rowid, title, subtitle, teaser, author, section, body_text, url)
+                VALUES('delete', old.id, old.title, old.subtitle, old.teaser, old.author, old.section, old.body_text, old.url);
+                INSERT INTO articles_fts(rowid, title, subtitle, teaser, author, section, body_text, url)
+                VALUES (new.id, new.title, new.subtitle, new.teaser, new.author, new.section, new.body_text, new.url);
+            END;
+            "#,
+        )?;
+        Ok(true)
+    }
+
     fn rebuild_fts_if_needed(&self, force_rebuild: bool) -> Result<()> {
         if !self.table_exists("articles_fts")? {
             return Ok(());
@@ -750,6 +854,15 @@ impl Database {
             .transpose()
     }
 
+    fn set_app_state(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO app_state(key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
     fn user_version(&self) -> Result<i32> {
         self.conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
@@ -791,39 +904,115 @@ impl Database {
             .map(|count| count > 0)
             .map_err(Into::into)
     }
+
+    fn backfill_preview_summaries_once(&mut self) -> Result<usize> {
+        if self
+            .get_app_state("preview_summary_backfill_v1")?
+            .is_some_and(|value| value == "1")
+        {
+            return Ok(0);
+        }
+
+        let pending = {
+            let mut stmt = self.conn.prepare(
+                "SELECT id, teaser, subtitle, body_text FROM articles WHERE TRIM(preview_summary) = ''",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+
+        let transaction = self.conn.transaction()?;
+        {
+            let mut update_stmt =
+                transaction.prepare("UPDATE articles SET preview_summary = ?1 WHERE id = ?2")?;
+            for (id, teaser, subtitle, body_text) in &pending {
+                let preview_summary =
+                    build_preview_summary_from_fields(teaser, subtitle, body_text);
+                update_stmt.execute(params![preview_summary, id])?;
+            }
+        }
+        transaction.execute(
+            "INSERT INTO app_state(key, value) VALUES ('preview_summary_backfill_v1', '1')
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [],
+        )?;
+        transaction.commit()?;
+
+        if !pending.is_empty() {
+            self.rebuild_fts_if_needed(true)?;
+        } else {
+            self.set_app_state("preview_summary_backfill_v1", "1")?;
+        }
+
+        Ok(pending.len())
+    }
+
+    fn clear_duplicate_clean_text_once(&mut self) -> Result<usize> {
+        if self
+            .get_app_state("clean_text_compacted_v1")?
+            .is_some_and(|value| value == "1")
+        {
+            return Ok(0);
+        }
+
+        let changed = self.conn.execute(
+            "UPDATE articles SET clean_text = '' WHERE clean_text <> ''",
+            [],
+        )?;
+        self.set_app_state("clean_text_compacted_v1", "1")?;
+        Ok(changed)
+    }
 }
 
 fn map_article_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredArticle> {
+    let title: String = row.get(2)?;
+    let subtitle: String = row.get(3)?;
+    let teaser: String = row.get(4)?;
+    let preview_summary: String = row.get(5)?;
+    let author: String = row.get(6)?;
+    let date: String = row.get(7)?;
+    let published_at: String = row.get(8)?;
+    let section: String = row.get(9)?;
+    let source_kind: String = row.get(10)?;
+    let source_label: String = row.get(11)?;
+    let body_text: String = row.get(12)?;
     Ok(StoredArticle {
         id: row.get(0)?,
         url: row.get(1)?,
-        title: row.get(2)?,
-        subtitle: row.get(3)?,
-        teaser: row.get(4)?,
-        preview_summary: row.get(5)?,
-        author: row.get(6)?,
-        date: row.get(7)?,
-        published_at: row.get(8)?,
-        section: row.get(9)?,
-        source_kind: row.get(10)?,
-        source_label: row.get(11)?,
-        body_text: row.get(12)?,
-        clean_text: row.get(13)?,
-        word_count: row.get(14)?,
-        fetched_at: row.get(15)?,
-        custom_topic: row.get(16)?,
-        uploaded_to_lingq: row.get::<_, i64>(17)? != 0,
-        lingq_lesson_id: row.get(18)?,
-        lingq_lesson_url: row.get(19)?,
+        title: title.clone(),
+        subtitle: subtitle.clone(),
+        teaser,
+        preview_summary,
+        author: author.clone(),
+        date: date.clone(),
+        published_at,
+        section,
+        source_kind,
+        source_label,
+        body_text: body_text.clone(),
+        clean_text: build_clean_text(&title, &subtitle, &author, &date, &body_text),
+        word_count: row.get(13)?,
+        fetched_at: row.get(14)?,
+        custom_topic: row.get(15)?,
+        uploaded_to_lingq: row.get::<_, i64>(16)? != 0,
+        lingq_lesson_id: row.get(17)?,
+        lingq_lesson_url: row.get(18)?,
     })
 }
 
 fn build_article_preview_summary(article: &Article) -> String {
-    for candidate in [
-        article.teaser.as_str(),
-        article.subtitle.as_str(),
-        article.body_text.as_str(),
-    ] {
+    build_preview_summary_from_fields(&article.teaser, &article.subtitle, &article.body_text)
+}
+
+fn build_preview_summary_from_fields(teaser: &str, subtitle: &str, body_text: &str) -> String {
+    for candidate in [teaser, subtitle, body_text] {
         let preview = normalize_preview_text(candidate, 220);
         if !preview.is_empty() {
             return preview;
@@ -1130,6 +1319,12 @@ mod tests {
                 .has_column("articles", "source_label")
                 .expect("source_label column check should succeed")
         );
+        assert!(
+            database
+                .has_column("articles", "preview_summary")
+                .expect("preview_summary column check should succeed")
+        );
+        assert!(!rows[0].preview_summary.trim().is_empty());
 
         drop(database);
         let _ = fs::remove_file(db_path);

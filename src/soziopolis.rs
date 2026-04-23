@@ -24,6 +24,7 @@ const MAX_SECTION_PAGE_DEPTH: usize = 80;
 const HTML_CACHE_TTL: Duration = Duration::from_secs(180);
 const HTML_DISK_CACHE_TTL: Duration = Duration::from_secs(900);
 const HTML_CACHE_CAPACITY: usize = 96;
+const HTML_DISK_CACHE_FILE_CAPACITY: usize = 160;
 
 static HTML_CACHE: OnceLock<Mutex<HashMap<String, CachedHtml>>> = OnceLock::new();
 
@@ -732,7 +733,10 @@ fn store_disk_cached_html(url: &str, body: &str) {
             "could not write browse cache file {}: {err}",
             path.display()
         ));
+        return;
     }
+
+    prune_disk_browse_cache();
 }
 
 fn browse_cache_path(url: &str) -> Result<std::path::PathBuf> {
@@ -743,6 +747,45 @@ fn hash_url(url: &str) -> String {
     let mut hasher = DefaultHasher::new();
     url.hash(&mut hasher);
     format!("{:016x}", hasher.finish())
+}
+
+fn prune_disk_browse_cache() {
+    let Ok(cache_dir) = app_paths::browse_cache_dir() else {
+        return;
+    };
+    let Ok(entries) = fs::read_dir(&cache_dir) else {
+        return;
+    };
+
+    let mut files = entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let metadata = entry.metadata().ok()?;
+            if !metadata.is_file() {
+                return None;
+            }
+            let modified = metadata.modified().ok()?;
+            let age = modified.elapsed().ok()?;
+            Some((entry.path(), modified, age))
+        })
+        .collect::<Vec<_>>();
+
+    for (path, _, age) in &files {
+        if *age > HTML_DISK_CACHE_TTL {
+            let _ = fs::remove_file(path);
+        }
+    }
+
+    files.retain(|(_, _, age)| *age <= HTML_DISK_CACHE_TTL);
+    if files.len() <= HTML_DISK_CACHE_FILE_CAPACITY {
+        return;
+    }
+
+    files.sort_by_key(|(_, modified, _)| *modified);
+    let remove_count = files.len().saturating_sub(HTML_DISK_CACHE_FILE_CAPACITY);
+    for (path, _, _) in files.into_iter().take(remove_count) {
+        let _ = fs::remove_file(path);
+    }
 }
 
 fn desired_section_page_count(limit: usize) -> usize {
@@ -1120,7 +1163,13 @@ fn infer_section_from_url(url: &str) -> Option<String> {
     Some(first.replace('-', " "))
 }
 
-fn build_clean_text(title: &str, subtitle: &str, author: &str, date: &str, body: &str) -> String {
+pub(crate) fn build_clean_text(
+    title: &str,
+    subtitle: &str,
+    author: &str,
+    date: &str,
+    body: &str,
+) -> String {
     let normalized_subtitle = clean_whitespace(subtitle);
     let normalized_body = normalize_body_for_lingq(body, title, &normalized_subtitle);
 
@@ -1138,6 +1187,20 @@ fn build_clean_text(title: &str, subtitle: &str, author: &str, date: &str, body:
     pieces.push(String::new());
     pieces.push(normalized_body);
     pieces.join("\n")
+}
+
+pub fn clear_browse_cache() -> Result<usize> {
+    let cache_dir = app_paths::browse_cache_dir()?;
+    let mut removed = 0usize;
+    for entry in fs::read_dir(cache_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() {
+            fs::remove_file(path)?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
 }
 
 pub fn normalize_article_date(value: &str) -> Option<String> {

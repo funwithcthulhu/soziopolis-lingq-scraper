@@ -66,6 +66,30 @@ impl SoziopolisLingqGui {
                         Err(err) => self.set_notice(err, NoticeKind::Error),
                     }
                 }
+                if ui.button("Clear browse cache").clicked() {
+                    match crate::soziopolis::clear_browse_cache() {
+                        Ok(removed) => {
+                            self.set_notice(
+                                format!("Cleared {} cached browse file(s).", removed),
+                                NoticeKind::Success,
+                            );
+                        }
+                        Err(err) => self.set_notice(err.to_string(), NoticeKind::Error),
+                    }
+                }
+                if ui.button("Compact local data").clicked() {
+                    match Database::shared_default()
+                        .and_then(|db| db.with_db(|database| database.compact_storage()))
+                    {
+                        Ok(()) => {
+                            self.set_notice(
+                                "Compacted the local database and trimmed the SQLite WAL.",
+                                NoticeKind::Success,
+                            );
+                        }
+                        Err(err) => self.set_notice(err.to_string(), NoticeKind::Error),
+                    }
+                }
             });
             if let Some(path) = &exe_path {
                 ui.small(
