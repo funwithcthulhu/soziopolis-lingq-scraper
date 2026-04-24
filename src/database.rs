@@ -1,11 +1,11 @@
 use crate::{
     app_paths,
-    domain::ArticleListItem,
+    domain::{ArticleListItem, ArticleListPage, LibrarySortMode},
     jobs::{CompletedJob, QueueSnapshot},
     soziopolis::{Article, build_clean_text},
 };
 use anyhow::{Context, Result};
-use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter, types::Value};
 use std::{
     collections::HashSet,
     path::Path,
@@ -16,21 +16,70 @@ use std::{
 const CURRENT_SCHEMA_VERSION: i32 = 8;
 static SHARED_DEFAULT_DATABASE: OnceLock<SharedDatabase> = OnceLock::new();
 
-#[path = "database/types.rs"]
-mod types;
-#[path = "database/migrations.rs"]
-mod migrations;
+fn library_order_clause(sort_mode: LibrarySortMode) -> &'static str {
+    match sort_mode {
+        LibrarySortMode::Newest => {
+            "COALESCE(NULLIF(published_at, ''), fetched_at) DESC, fetched_at DESC, id DESC"
+        }
+        LibrarySortMode::Oldest => {
+            "COALESCE(NULLIF(published_at, ''), fetched_at) ASC, fetched_at ASC, id ASC"
+        }
+        LibrarySortMode::Longest => "word_count DESC, id DESC",
+        LibrarySortMode::Shortest => "word_count ASC, id ASC",
+        LibrarySortMode::Title => "LOWER(title) ASC, id ASC",
+    }
+}
+
+fn build_article_card_where_clause(
+    search: Option<&str>,
+    section: Option<&str>,
+    only_not_uploaded: bool,
+    min_words: Option<usize>,
+    max_words: Option<usize>,
+) -> (String, Vec<Value>) {
+    let mut clauses = Vec::new();
+    let mut values = Vec::new();
+
+    if let Some(fts_query) = build_fts_query(search) {
+        clauses.push("id IN (SELECT rowid FROM articles_fts WHERE articles_fts MATCH ?)");
+        values.push(Value::Text(fts_query));
+    }
+    if let Some(section) = section.filter(|value| !value.trim().is_empty()) {
+        clauses.push("section = ?");
+        values.push(Value::Text(section.to_owned()));
+    }
+    if only_not_uploaded {
+        clauses.push("uploaded_to_lingq = 0");
+    }
+    if let Some(min_words) = min_words {
+        clauses.push("word_count >= ?");
+        values.push(Value::Integer(min_words as i64));
+    }
+    if let Some(max_words) = max_words {
+        clauses.push("word_count <= ?");
+        values.push(Value::Integer(max_words as i64));
+    }
+
+    let where_clause = if clauses.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", clauses.join(" AND "))
+    };
+
+    (where_clause, values)
+}
+
 #[path = "database/maintenance.rs"]
 mod maintenance;
+#[path = "database/migrations.rs"]
+mod migrations;
+#[path = "database/types.rs"]
+mod types;
 
-pub use types::{debug_article_fingerprint, LibraryStats, SectionCount, StoredArticle};
+pub use types::{LibraryStats, SectionCount, StoredArticle, debug_article_fingerprint};
 use types::{
-    build_article_fingerprint,
-    build_article_preview_summary,
-    build_fts_query,
-    build_preview_summary_from_fields,
-    build_text_fingerprint,
-    map_article_card_row,
+    build_article_fingerprint, build_article_preview_summary, build_fts_query,
+    build_preview_summary_from_fields, build_text_fingerprint, map_article_card_row,
     map_article_row,
 };
 
@@ -312,6 +361,83 @@ impl Database {
             params![fts_query, section, if only_not_uploaded { 1 } else { 0 }],
             map_article_card_row,
         )?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn list_article_cards_page(
+        &self,
+        search: Option<&str>,
+        section: Option<&str>,
+        only_not_uploaded: bool,
+        min_words: Option<usize>,
+        max_words: Option<usize>,
+        sort_mode: LibrarySortMode,
+        offset: usize,
+        limit: usize,
+    ) -> Result<ArticleListPage> {
+        let page_limit = limit.max(1);
+        let (where_clause, values) = build_article_card_where_clause(
+            search,
+            section,
+            only_not_uploaded,
+            min_words,
+            max_words,
+        );
+
+        let count_sql = format!("SELECT COUNT(*) FROM articles {where_clause}");
+        let total_count =
+            self.conn
+                .query_row(&count_sql, params_from_iter(values.iter()), |row| {
+                    row.get::<_, i64>(0)
+                })? as usize;
+
+        let sql = format!(
+            r#"
+                SELECT
+                    id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section,
+                    word_count, fetched_at, custom_topic, uploaded_to_lingq, lingq_lesson_id, lingq_lesson_url
+                FROM articles
+                {where_clause}
+                ORDER BY {}
+                LIMIT ? OFFSET ?
+            "#,
+            library_order_clause(sort_mode)
+        );
+        let mut page_values = values.clone();
+        page_values.push(Value::Integer(page_limit as i64));
+        page_values.push(Value::Integer(offset as i64));
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(page_values.iter()), map_article_card_row)?;
+        let items = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(ArticleListPage {
+            items,
+            total_count,
+            offset,
+            limit: page_limit,
+        })
+    }
+
+    pub fn list_matching_article_card_ids(
+        &self,
+        search: Option<&str>,
+        section: Option<&str>,
+        only_not_uploaded: bool,
+        min_words: Option<usize>,
+        max_words: Option<usize>,
+    ) -> Result<Vec<i64>> {
+        let (where_clause, values) = build_article_card_where_clause(
+            search,
+            section,
+            only_not_uploaded,
+            min_words,
+            max_words,
+        );
+        let sql = format!("SELECT id FROM articles {where_clause}");
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(values.iter()), |row| row.get::<_, i64>(0))?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
     }
@@ -604,13 +730,13 @@ impl Database {
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
     }
-
 }
 
 #[cfg(test)]
 mod tests {
     use super::{CURRENT_SCHEMA_VERSION, Database};
     use crate::{
+        domain::LibrarySortMode,
         jobs::{
             CompletedJob, FailedFetchItem, JobKind, QueueSnapshot, QueuedJob, QueuedJobRequest,
             UploadFailure,
@@ -721,6 +847,39 @@ mod tests {
             .expect("url lookup should succeed");
 
         assert_eq!(looked_up_id, Some(saved_id));
+
+        drop(database);
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn list_article_cards_page_returns_total_count_and_respects_offset() {
+        let db_path = temp_db_path();
+        let database = Database::open(&db_path).expect("database should open");
+
+        for index in 0..5 {
+            let mut article = sample_article(
+                &format!("https://example.com/page-{index}"),
+                &format!("Title {index}"),
+                "Essays",
+                1000 + index,
+            );
+            article.published_at = format!("2026-04-0{}", index + 1);
+            database
+                .save_article(&article)
+                .expect("article should save for paging test");
+        }
+
+        let page = database
+            .list_article_cards_page(None, None, false, None, None, LibrarySortMode::Newest, 2, 2)
+            .expect("paged card query should succeed");
+
+        assert_eq!(page.total_count, 5);
+        assert_eq!(page.offset, 2);
+        assert_eq!(page.limit, 2);
+        assert_eq!(page.items.len(), 2);
+        assert_eq!(page.items[0].title, "Title 2");
+        assert_eq!(page.items[1].title, "Title 1");
 
         drop(database);
         let _ = fs::remove_file(db_path);

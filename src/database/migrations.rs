@@ -319,7 +319,12 @@ impl Database {
         Ok(())
     }
 
-    pub(super) fn add_column_if_missing(&self, table: &str, column: &str, definition: &str) -> Result<bool> {
+    pub(super) fn add_column_if_missing(
+        &self,
+        table: &str,
+        column: &str,
+        definition: &str,
+    ) -> Result<bool> {
         if self.has_column(table, column)? {
             return Ok(false);
         }

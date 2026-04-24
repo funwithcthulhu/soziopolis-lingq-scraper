@@ -1,3 +1,4 @@
+pub mod app_error;
 pub mod app_paths;
 pub mod commands;
 pub mod context;

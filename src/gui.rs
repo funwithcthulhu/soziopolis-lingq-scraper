@@ -1,9 +1,10 @@
 use crate::{
+    app_error::{AppError, AppErrorKind},
     app_paths, commands,
     context::AppContext,
     credential_store,
     database::{LibraryStats, SectionCount, StoredArticle},
-    domain::ArticleListItem,
+    domain::{ArticleListItem, ArticleListPage, LibrarySortMode},
     jobs::{
         CompletedJob, FailedFetchItem, ImportProgress, JobKind, QueueSnapshot, QueuedJob,
         QueuedJobRequest, UploadFailure, UploadProgress, UploadSuccess,
@@ -20,8 +21,8 @@ use crate::{
 };
 use chrono::NaiveDate;
 use eframe::egui::{
-    self, Align, Color32, Context, Frame, Layout, Margin, Panel, ProgressBar, RichText,
-    ScrollArea, Stroke, TextEdit, ViewportBuilder,
+    self, Align, Color32, Context, Frame, Layout, Margin, Panel, ProgressBar, RichText, ScrollArea,
+    Stroke, TextEdit, ViewportBuilder,
 };
 use std::{
     any::Any,
@@ -50,6 +51,7 @@ mod views;
 
 use helpers::*;
 use state::*;
+use tasks::*;
 
 pub fn run() -> eframe::Result<()> {
     if let Ok(log_path) = logging::init() {

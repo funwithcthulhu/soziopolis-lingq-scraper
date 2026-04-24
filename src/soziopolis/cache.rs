@@ -1,6 +1,10 @@
 use super::*;
 
-pub(super) fn section_page_urls(section: &Section, first_page_html: &str, limit: usize) -> Vec<String> {
+pub(super) fn section_page_urls(
+    section: &Section,
+    first_page_html: &str,
+    limit: usize,
+) -> Vec<String> {
     let desired_pages = desired_section_page_count(limit);
     let mut discovered = extract_paginated_section_urls(section, first_page_html, desired_pages);
     if discovered.is_empty() {

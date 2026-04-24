@@ -51,7 +51,14 @@ fn sample_article(url: &str, title: &str, section: &str, word_count: usize) -> A
 fn refresh_content_reports_saved_article_urls_and_stats() {
     let (ctx, path) = temp_context("soziopolis_workflow_refresh");
     ctx.db
-        .with_db(|db| db.save_article(&sample_article("https://example.com/one", "One", "Essay", 1200)))
+        .with_db(|db| {
+            db.save_article(&sample_article(
+                "https://example.com/one",
+                "One",
+                "Essay",
+                1200,
+            ))
+        })
         .expect("article should save");
 
     let refreshed = commands::refresh_content(&ctx).expect("refresh should succeed");
@@ -79,7 +86,14 @@ fn delete_article_updates_follow_up_refresh() {
     let (ctx, path) = temp_context("soziopolis_workflow_delete");
     let article_id = ctx
         .db
-        .with_db(|db| db.save_article(&sample_article("https://example.com/delete", "Delete Me", "Essay", 950)))
+        .with_db(|db| {
+            db.save_article(&sample_article(
+                "https://example.com/delete",
+                "Delete Me",
+                "Essay",
+                950,
+            ))
+        })
         .expect("article should save");
 
     commands::delete_article(&ctx, article_id).expect("delete should succeed");

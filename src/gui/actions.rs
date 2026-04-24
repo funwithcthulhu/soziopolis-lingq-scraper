@@ -33,27 +33,40 @@ impl SoziopolisLingqGui {
         });
     }
 
+    pub(super) fn record_task_failure(&mut self, error: AppError) {
+        if self.recent_task_failures.len() >= 20 {
+            self.recent_task_failures.pop_back();
+        }
+        self.recent_task_failures.push_front(error);
+    }
+
+    pub(super) fn set_task_error_notice(&mut self, error: AppError) {
+        let notice = error.notice_message();
+        self.record_task_failure(error);
+        self.set_notice(notice, NoticeKind::Error);
+    }
+
     pub(super) fn request_content_refresh(&mut self, reason: &str) {
         self.library_loading = true;
         self.content_refresh_request_id = self.content_refresh_request_id.wrapping_add(1);
         let request_id = self.content_refresh_request_id;
         let reason = reason.to_owned();
         let app_context = self.app_context().ok();
-        let tx = self.tx.clone();
+        let task_runtime = self.task_runtime.clone();
         logging::info(format!(
             "starting content refresh pipeline {request_id} after {reason}"
         ));
-        super::tasks::spawn_app_event_task(
-            tx,
+        task_runtime.spawn(
+            AppTaskKind::Refresh,
             "Content refresh worker",
             move |_| build_content_refresh_event_with_context(app_context, request_id, reason),
-            move |message| AppEvent::ContentRefreshCompleted {
+            move |error| AppEvent::ContentRefreshCompleted {
                 request_id,
                 reason: "internal refresh error".to_owned(),
                 result: ContentRefreshResult {
-                    imported_urls: Err(message.clone()),
-                    library_articles: Err(message.clone()),
-                    library_stats: Err(message),
+                    imported_urls: Err(error.notice_message()),
+                    library_articles: Err(error.notice_message()),
+                    library_stats: Err(error.notice_message()),
                 },
             },
         );
@@ -73,19 +86,20 @@ impl SoziopolisLingqGui {
         self.browse_session_state = None;
         self.browse_request_id = self.browse_request_id.wrapping_add(1);
         let request_id = self.browse_request_id;
-        let tx = self.tx.clone();
+        let task_runtime = self.task_runtime.clone();
         let section = self.browse_section.clone();
         let limit = self.browse_limit;
-        super::tasks::spawn_app_event_task(
-            tx,
+        task_runtime.spawn(
+            AppTaskKind::Browse,
             "Browse section worker",
             move |_| AppEvent::BrowseLoaded {
                 request_id,
-                result: BrowseService::browse_section(&section, limit).map_err(|err| err.to_string()),
+                result: BrowseService::browse_section(&section, limit)
+                    .map_err(|err| AppError::classify("browse section", err.to_string())),
             },
-            move |message| AppEvent::BrowseLoaded {
+            move |error| AppEvent::BrowseLoaded {
                 request_id,
-                result: Err(message),
+                result: Err(error),
             },
         );
     }
@@ -104,18 +118,19 @@ impl SoziopolisLingqGui {
         self.browse_session_state = None;
         self.browse_request_id = self.browse_request_id.wrapping_add(1);
         let request_id = self.browse_request_id;
-        let tx = self.tx.clone();
+        let task_runtime = self.task_runtime.clone();
         let limit = self.browse_limit;
-        super::tasks::spawn_app_event_task(
-            tx,
+        task_runtime.spawn(
+            AppTaskKind::Browse,
             "Browse all sections worker",
             move |_| AppEvent::BrowseLoaded {
                 request_id,
-                result: BrowseService::browse_all_sections(limit).map_err(|err| err.to_string()),
+                result: BrowseService::browse_all_sections(limit)
+                    .map_err(|err| AppError::classify("browse all sections", err.to_string())),
             },
-            move |message| AppEvent::BrowseLoaded {
+            move |error| AppEvent::BrowseLoaded {
                 request_id,
-                result: Err(message),
+                result: Err(error),
             },
         );
     }
@@ -143,22 +158,23 @@ impl SoziopolisLingqGui {
         self.browse_loading = true;
         self.browse_request_id = self.browse_request_id.wrapping_add(1);
         let request_id = self.browse_request_id;
-        let tx = self.tx.clone();
+        let task_runtime = self.task_runtime.clone();
         let limit = self.browse_limit;
 
         match self.browse_session_state.clone() {
             Some(BrowseSessionState::CurrentSection(state)) => {
-                super::tasks::spawn_app_event_task(
-                    tx,
+                task_runtime.spawn(
+                    AppTaskKind::Browse,
                     "Browse section continuation worker",
                     move |_| AppEvent::BrowseLoaded {
                         request_id,
-                        result: BrowseService::continue_browse_section(state, limit)
-                            .map_err(|err| err.to_string()),
+                        result: BrowseService::continue_browse_section(state, limit).map_err(
+                            |err| AppError::classify("continue browse section", err.to_string()),
+                        ),
                     },
-                    move |message| AppEvent::BrowseLoaded {
+                    move |error| AppEvent::BrowseLoaded {
                         request_id,
-                        result: Err(message),
+                        result: Err(error),
                     },
                 );
             }
@@ -176,22 +192,25 @@ impl SoziopolisLingqGui {
         self.browse_loading = true;
         self.browse_request_id = self.browse_request_id.wrapping_add(1);
         let request_id = self.browse_request_id;
-        let tx = self.tx.clone();
+        let task_runtime = self.task_runtime.clone();
         let limit = self.browse_limit;
 
         match self.browse_session_state.clone() {
             Some(BrowseSessionState::AllSections(state)) => {
-                super::tasks::spawn_app_event_task(
-                    tx,
+                task_runtime.spawn(
+                    AppTaskKind::Browse,
                     "Browse all sections continuation worker",
                     move |_| AppEvent::BrowseLoaded {
                         request_id,
-                        result: BrowseService::continue_browse_all_sections(state, limit)
-                            .map_err(|err| err.to_string()),
+                        result: BrowseService::continue_browse_all_sections(state, limit).map_err(
+                            |err| {
+                                AppError::classify("continue browse all sections", err.to_string())
+                            },
+                        ),
                     },
-                    move |message| AppEvent::BrowseLoaded {
+                    move |error| AppEvent::BrowseLoaded {
                         request_id,
-                        result: Err(message),
+                        result: Err(error),
                     },
                 );
             }
@@ -205,14 +224,17 @@ impl SoziopolisLingqGui {
         self.show_preview = true;
         self.preview_article = None;
         self.preview_stored_article = None;
-        let tx = self.tx.clone();
-        super::tasks::spawn_app_event_task(
-            tx,
+        let task_runtime = self.task_runtime.clone();
+        task_runtime.spawn(
+            AppTaskKind::Preview,
             "Preview worker",
-            move |_| AppEvent::PreviewLoaded(
-                BrowseService::preview_article(&url).map_err(|err| err.to_string()),
-            ),
-            move |message| AppEvent::PreviewLoaded(Err(message)),
+            move |_| {
+                AppEvent::PreviewLoaded(
+                    BrowseService::preview_article(&url)
+                        .map_err(|err| AppError::classify("preview article", err.to_string())),
+                )
+            },
+            move |error| AppEvent::PreviewLoaded(Err(error)),
         );
     }
 
@@ -237,10 +259,27 @@ impl SoziopolisLingqGui {
     }
 
     pub(super) fn select_all_visible_articles(&mut self) {
-        match self.filtered_library_articles() {
-            Ok(articles) => {
-                self.lingq_selected_articles =
-                    articles.into_iter().map(|article| article.id).collect();
+        if self.library_uses_paged_query() {
+            match self.ensure_library_page_cache() {
+                Ok(()) => {
+                    self.lingq_selected_articles = self
+                        .library_page_cache
+                        .as_ref()
+                        .map(|page| page.items.iter().map(|article| article.id).collect())
+                        .unwrap_or_default();
+                }
+                Err(err) => self.set_notice(err, NoticeKind::Error),
+            }
+            return;
+        }
+
+        match self.ensure_filtered_library_cache() {
+            Ok(()) => {
+                self.lingq_selected_articles = self
+                    .library_filtered_cache_results
+                    .iter()
+                    .map(|article| article.id)
+                    .collect();
             }
             Err(err) => self.set_notice(err, NoticeKind::Error),
         }
@@ -253,15 +292,18 @@ impl SoziopolisLingqGui {
         }
         logging::info("loading LingQ collections");
         self.lingq_loading_collections = true;
-        let tx = self.tx.clone();
+        let task_runtime = self.task_runtime.clone();
         let api_key = self.lingq_api_key.clone();
-        super::tasks::spawn_app_event_task(
-            tx,
+        task_runtime.spawn(
+            AppTaskKind::Lingq,
             "LingQ collections worker",
-            move |_| AppEvent::CollectionsLoaded(
-                LingqService::collections(&api_key, "de").map_err(|err| err.to_string()),
-            ),
-            move |message| AppEvent::CollectionsLoaded(Err(message)),
+            move |_| {
+                AppEvent::CollectionsLoaded(
+                    LingqService::collections(&api_key, "de")
+                        .map_err(|err| AppError::classify("load LingQ courses", err.to_string())),
+                )
+            },
+            move |error| AppEvent::CollectionsLoaded(Err(error)),
         );
     }
 
@@ -275,17 +317,20 @@ impl SoziopolisLingqGui {
         }
         logging::info("attempting LingQ login");
         self.lingq_loading_collections = true;
-        let tx = self.tx.clone();
+        let task_runtime = self.task_runtime.clone();
         let username = self.lingq_username.clone();
         let password = self.lingq_password.clone();
         self.lingq_password.clear();
-        super::tasks::spawn_app_event_task(
-            tx,
+        task_runtime.spawn(
+            AppTaskKind::Lingq,
             "LingQ login worker",
-            move |_| AppEvent::LingqLoggedIn(
-                LingqService::login(&username, &password).map_err(|err| err.to_string()),
-            ),
-            move |message| AppEvent::LingqLoggedIn(Err(message)),
+            move |_| {
+                AppEvent::LingqLoggedIn(
+                    LingqService::login(&username, &password)
+                        .map_err(|err| AppError::classify("LingQ login", err.to_string())),
+                )
+            },
+            move |error| AppEvent::LingqLoggedIn(Err(error)),
         );
     }
 

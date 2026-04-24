@@ -1,4 +1,4 @@
-# Soziopolis LingQ Tool
+# Soziopolis Reader
 
 A Rust-based desktop and CLI app for working with articles from `soziopolis.de`:
 
@@ -82,6 +82,29 @@ That refreshes the portable app folders and Desktop shortcut. The portable copy 
 
 On a new PC, LingQ will usually need to be reconnected once because the token is stored in Windows Credential Manager on each machine.
 
+### 6. Windows installer build
+
+If you want a normal Windows installer that integrates with Start Menu, Apps & Features, and optional Desktop shortcuts, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1
+```
+
+That script will:
+
+- build the release executable
+- stage the installer files
+- compile `installer\SoziopolisReader.iss`
+- output an installer like:
+
+`dist\SoziopolisReaderSetup-1.0.0.exe`
+
+You can also point it at a specific Inno Setup compiler path:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1 -IsccPath "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+```
+
 ## Commands
 
 ```powershell
@@ -139,6 +162,12 @@ To refresh the portable folders and Desktop shortcut in one step, use:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build-portable.ps1
+```
+
+To build the standard Windows installer, use:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1
 ```
 
 ## Notes

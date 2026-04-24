@@ -243,7 +243,7 @@ impl SoziopolisLingqGui {
 
     pub(super) fn render_browse_view(&mut self, ui: &mut egui::Ui) {
         let browse_job_active = self.batch_fetching || self.browse_loading;
-        let available_sections = SECTIONS.to_vec();
+        let available_sections = SECTIONS;
         let imported_count = self
             .browse_articles
             .iter()
@@ -254,12 +254,7 @@ impl SoziopolisLingqGui {
             .iter()
             .filter(|article| self.browse_article_passes_new_filter(article))
             .count();
-        let visible_articles = self
-            .browse_articles
-            .iter()
-            .filter(|article| self.browse_article_is_visible(article))
-            .cloned()
-            .collect::<Vec<_>>();
+        let visible_indices = self.visible_browse_article_indices();
 
         framed_panel(ui, |ui| {
             let previous_section = self.browse_section.clone();
@@ -274,7 +269,7 @@ impl SoziopolisLingqGui {
                             .unwrap_or(self.browse_section.as_str()),
                     )
                     .show_ui(ui, |ui| {
-                        for section in &available_sections {
+                        for section in available_sections {
                             ui.selectable_value(
                                 &mut self.browse_section,
                                 section.id.to_owned(),
@@ -340,8 +335,9 @@ impl SoziopolisLingqGui {
                     )
                     .clicked()
                 {
-                    self.browse_selected = visible_articles
+                    self.browse_selected = visible_indices
                         .iter()
+                        .map(|index| &self.browse_articles[*index])
                         .filter(|article| !self.browse_imported_urls.contains(&article.url))
                         .map(|article| article.url.clone())
                         .collect();
@@ -394,7 +390,7 @@ impl SoziopolisLingqGui {
                     self.browse_selected.len(),
                     imported_count,
                     new_count,
-                    visible_articles.len()
+                    visible_indices.len()
                 ));
             });
             if self.browse_scope == BrowseScope::CurrentSection && self.browse_end_reached {
@@ -415,101 +411,112 @@ impl SoziopolisLingqGui {
         });
 
         ui.add_space(12.0);
-        ScrollArea::vertical().show(ui, |ui| {
-            for article in visible_articles {
-                ui.push_id(article.url.clone(), |ui| {
-                    article_card_frame(ui, |ui| {
-                        ui.vertical(|ui| {
-                            let mut checked = self.browse_selected.contains(&article.url);
-                            ui.horizontal_wrapped(|ui| {
-                                let selection_response = ui.add_enabled(
-                                    !browse_job_active,
-                                    egui::Checkbox::without_text(&mut checked),
-                                );
-                                if selection_response.changed() {
-                                    if checked {
-                                        self.browse_selected.insert(article.url.clone());
-                                    } else {
-                                        self.browse_selected.remove(&article.url);
+        ScrollArea::vertical().show_rows(
+            ui,
+            browse_card_row_height(),
+            visible_indices.len(),
+            |ui, row_range| {
+                for row in row_range {
+                    let article = self.browse_articles[visible_indices[row]].clone();
+                    ui.push_id(article.url.clone(), |ui| {
+                        article_card_frame(ui, |ui| {
+                            ui.vertical(|ui| {
+                                let mut checked = self.browse_selected.contains(&article.url);
+                                ui.horizontal_wrapped(|ui| {
+                                    let selection_response = ui.add_enabled(
+                                        !browse_job_active,
+                                        egui::Checkbox::without_text(&mut checked),
+                                    );
+                                    if selection_response.changed() {
+                                        if checked {
+                                            self.browse_selected.insert(article.url.clone());
+                                        } else {
+                                            self.browse_selected.remove(&article.url);
+                                        }
                                     }
+                                    ui.label(RichText::new(&article.title).strong().size(15.5));
+                                });
+                                if !article.teaser.is_empty() {
+                                    ui.small(
+                                        RichText::new(truncate_for_ui(&article.teaser, 220))
+                                            .color(Color32::from_gray(188))
+                                            .italics(),
+                                    );
                                 }
-                                ui.label(RichText::new(&article.title).strong().size(15.5));
-                            });
-                            if !article.teaser.is_empty() {
+                                ui.horizontal_wrapped(|ui| {
+                                    tag(ui, &article.section);
+                                    if !article.author.is_empty() {
+                                        tag(ui, &truncate_for_ui(&article.author, 28));
+                                    }
+                                    if !article.date.is_empty() {
+                                        tag(ui, &article.date);
+                                    }
+                                    if self.browse_imported_urls.contains(&article.url) {
+                                        success_tag(ui, "Imported");
+                                    }
+                                    if ui
+                                        .add_enabled(
+                                            !browse_job_active,
+                                            egui::Link::new("Open original"),
+                                        )
+                                        .clicked()
+                                    {
+                                        let _ = webbrowser::open(&article.url);
+                                    }
+                                    if ui
+                                        .add_enabled(!browse_job_active, egui::Link::new("Preview"))
+                                        .clicked()
+                                    {
+                                        self.open_preview(article.url.clone());
+                                    }
+                                });
                                 ui.small(
-                                    RichText::new(truncate_for_ui(&article.teaser, 220))
-                                        .color(Color32::from_gray(188))
-                                        .italics(),
+                                    RichText::new(compact_url(&article.url))
+                                        .color(Color32::from_gray(150)),
                                 );
-                            }
-                            ui.horizontal_wrapped(|ui| {
-                                tag(ui, &article.section);
-                                if !article.author.is_empty() {
-                                    tag(ui, &truncate_for_ui(&article.author, 28));
-                                }
-                                if !article.date.is_empty() {
-                                    tag(ui, &article.date);
-                                }
-                                if self.browse_imported_urls.contains(&article.url) {
-                                    success_tag(ui, "Imported");
-                                }
-                                if ui
-                                    .add_enabled(!browse_job_active, egui::Link::new("Open original"))
-                                    .clicked()
-                                {
-                                    let _ = webbrowser::open(&article.url);
-                                }
-                                if ui
-                                    .add_enabled(!browse_job_active, egui::Link::new("Preview"))
-                                    .clicked()
-                                {
-                                    self.open_preview(article.url.clone());
-                                }
                             });
-                            ui.small(
-                                RichText::new(compact_url(&article.url))
-                                    .color(Color32::from_gray(150)),
-                            );
                         });
                     });
-                });
-                ui.add_space(4.0);
-            }
-
-            ui.add_space(8.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.label(match self.browse_scope {
-                    BrowseScope::CurrentSection => "Need more from this section?",
-                    BrowseScope::AllSections => "Need more from all sections?",
-                });
-                if ui
-                    .add_enabled(
-                        !browse_job_active
-                            && !(self.browse_scope == BrowseScope::CurrentSection
-                                && self.browse_end_reached),
-                        egui::Button::new("Load 80 more"),
-                    )
-                    .clicked()
-                {
-                    self.browse_limit += 80;
-                    match self.browse_scope {
-                        BrowseScope::CurrentSection => self.load_more_current_section(),
-                        BrowseScope::AllSections => self.load_more_all_sections(),
-                    }
                 }
+            },
+        );
+        ui.add_space(8.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(match self.browse_scope {
+                BrowseScope::CurrentSection => "Need more from this section?",
+                BrowseScope::AllSections => "Need more from all sections?",
             });
+            if ui
+                .add_enabled(
+                    !browse_job_active
+                        && !(self.browse_scope == BrowseScope::CurrentSection
+                            && self.browse_end_reached),
+                    egui::Button::new("Load 80 more"),
+                )
+                .clicked()
+            {
+                self.browse_limit += 80;
+                match self.browse_scope {
+                    BrowseScope::CurrentSection => self.load_more_current_section(),
+                    BrowseScope::AllSections => self.load_more_all_sections(),
+                }
+            }
         });
     }
 
     pub(super) fn render_library_view(&mut self, ui: &mut egui::Ui) {
         let library_job_active = self.lingq_uploading;
-        let filtered_articles = match self.filtered_library_articles() {
-            Ok(articles) => articles,
-            Err(err) => {
-                self.set_notice(err, NoticeKind::Error);
-                self.library_articles.clone()
-            }
-        };
+        let filter_state_before = format!(
+            "{}|{}|{}|{}|{}|{}|{}|{}",
+            self.library_search.trim(),
+            self.library_topic.trim(),
+            self.library_only_not_uploaded,
+            self.library_word_count_min.trim(),
+            self.library_word_count_max.trim(),
+            self.library_sort_mode.label(),
+            self.library_group_by_topic,
+            self.library_dense_mode
+        );
 
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Library Filters").strong());
@@ -598,12 +605,68 @@ impl SoziopolisLingqGui {
             });
         }
 
+        let filter_state_after = format!(
+            "{}|{}|{}|{}|{}|{}|{}|{}",
+            self.library_search.trim(),
+            self.library_topic.trim(),
+            self.library_only_not_uploaded,
+            self.library_word_count_min.trim(),
+            self.library_word_count_max.trim(),
+            self.library_sort_mode.label(),
+            self.library_group_by_topic,
+            self.library_dense_mode
+        );
+        if filter_state_before != filter_state_after {
+            self.library_page_index = 0;
+            self.library_page_cache_key.clear();
+            self.library_page_cache = None;
+        }
+
+        let use_paged_query = self.library_uses_paged_query();
+        let mut filtered_count = self.library_articles.len();
+        let mut page_range_label = None;
+        let display_articles = if use_paged_query {
+            match self.ensure_library_page_cache() {
+                Ok(()) => {
+                    if let Some(page) = &self.library_page_cache {
+                        filtered_count = page.total_count;
+                        let start = if page.total_count == 0 {
+                            0
+                        } else {
+                            page.offset + 1
+                        };
+                        let end = (page.offset + page.items.len()).min(page.total_count);
+                        page_range_label = Some(format!("{start}-{end} of {}", page.total_count));
+                        page.items.clone()
+                    } else {
+                        Vec::new()
+                    }
+                }
+                Err(err) => {
+                    self.set_notice(err, NoticeKind::Error);
+                    self.library_articles.clone()
+                }
+            }
+        } else {
+            match self.ensure_filtered_library_cache() {
+                Ok(()) => {
+                    filtered_count = self.library_filtered_cache_results.len();
+                    self.library_filtered_cache_results.clone()
+                }
+                Err(err) => {
+                    self.set_notice(err, NoticeKind::Error);
+                    self.library_articles.clone()
+                }
+            }
+        };
+
         ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {
-            ui.label(format!(
-                "Showing {} saved article(s).",
-                filtered_articles.len()
-            ));
+            if let Some(range_label) = page_range_label.as_ref() {
+                ui.label(format!("Showing {range_label} saved article(s)."));
+            } else {
+                ui.label(format!("Showing {} saved article(s).", filtered_count));
+            }
             ui.label(format!(
                 "{} article(s) selected for LingQ upload.",
                 self.lingq_selected_articles.len()
@@ -621,11 +684,9 @@ impl SoziopolisLingqGui {
                 )
                 .clicked()
             {
-                self.lingq_selected_articles = filtered_articles
-                    .iter()
-                    .filter(|article| !article.uploaded_to_lingq)
-                    .map(|article| article.id)
-                    .collect();
+                if let Err(err) = self.select_all_matching_not_uploaded_articles() {
+                    self.set_notice(err, NoticeKind::Error);
+                }
             }
             if ui
                 .add_enabled(!library_job_active, egui::Button::new("Clear selection"))
@@ -636,48 +697,98 @@ impl SoziopolisLingqGui {
         });
         ui.add_space(6.0);
         self.lingq_panel(ui);
-        ui.add_space(8.0);
-        ScrollArea::vertical().show(ui, |ui| {
-            if self.library_group_by_topic {
-                let topic_counts = collect_topic_counts(&filtered_articles);
-                let mut current_topic = String::new();
-                for article in filtered_articles.clone() {
-                    let article_topic = effective_topic_for_article(&article);
-                    if article_topic != current_topic {
-                        current_topic = article_topic.clone();
-                        ui.add_space(4.0);
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(format!(
-                                    "{} ({})",
-                                    current_topic,
-                                    topic_counts.get(&current_topic).copied().unwrap_or(0)
-                                ))
-                                .strong()
-                                .size(16.5),
-                            )
-                            .wrap(),
-                        );
-                        ui.add_space(4.0);
+        if use_paged_query {
+            let paging_info = self.library_page_cache.as_ref().and_then(|page| {
+                (page.total_count > page.limit).then_some((
+                    page.limit.max(1),
+                    (page.offset / page.limit.max(1)) + 1,
+                    page.total_count.div_ceil(page.limit.max(1)),
+                ))
+            });
+            if let Some((page_size, current_page, total_pages)) = paging_info {
+                ui.add_space(8.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(format!("Page {current_page} of {total_pages}"));
+                    if ui
+                        .add_enabled(
+                            self.library_page_index > 0,
+                            egui::Button::new("Previous page"),
+                        )
+                        .clicked()
+                    {
+                        self.library_page_index = self.library_page_index.saturating_sub(1);
+                        self.library_page_cache_key.clear();
+                        self.library_page_cache = None;
                     }
-                    if self.library_dense_mode {
-                        render_library_article_dense_row(self, ui, article);
-                    } else {
-                        render_library_article_card(self, ui, article);
+                    if ui
+                        .add_enabled(current_page < total_pages, egui::Button::new("Next page"))
+                        .clicked()
+                    {
+                        self.library_page_index += 1;
+                        self.library_page_cache_key.clear();
+                        self.library_page_cache = None;
                     }
-                    ui.add_space(4.0);
-                }
-            } else {
-                for article in filtered_articles {
-                    if self.library_dense_mode {
-                        render_library_article_dense_row(self, ui, article);
-                    } else {
-                        render_library_article_card(self, ui, article);
-                    }
-                    ui.add_space(4.0);
-                }
+                    ui.small(format!("{page_size} per page"));
+                });
             }
-        });
+        }
+        ui.add_space(8.0);
+        enum LibraryDisplayRow {
+            Header { topic: String, count: usize },
+            Article(usize),
+        }
+
+        let display_rows = if self.library_group_by_topic {
+            let topic_counts = collect_topic_counts(&display_articles);
+            let mut rows = Vec::with_capacity(display_articles.len() * 2);
+            let mut current_topic = String::new();
+            for (index, article) in display_articles.iter().enumerate() {
+                let article_topic = effective_topic_for_article(article);
+                if article_topic != current_topic {
+                    current_topic = article_topic.clone();
+                    rows.push(LibraryDisplayRow::Header {
+                        topic: current_topic.clone(),
+                        count: topic_counts.get(&current_topic).copied().unwrap_or(0),
+                    });
+                }
+                rows.push(LibraryDisplayRow::Article(index));
+            }
+            rows
+        } else {
+            (0..display_articles.len())
+                .map(LibraryDisplayRow::Article)
+                .collect::<Vec<_>>()
+        };
+
+        ScrollArea::vertical().show_rows(
+            ui,
+            library_card_row_height(self.library_dense_mode),
+            display_rows.len(),
+            |ui, row_range| {
+                for row in row_range {
+                    match &display_rows[row] {
+                        LibraryDisplayRow::Header { topic, count } => {
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(format!("{topic} ({count})"))
+                                        .strong()
+                                        .size(16.5),
+                                )
+                                .wrap(),
+                            );
+                        }
+                        LibraryDisplayRow::Article(index) => {
+                            let article = display_articles[*index].clone();
+                            if self.library_dense_mode {
+                                render_library_article_dense_row(self, ui, article);
+                            } else {
+                                render_library_article_card(self, ui, article);
+                            }
+                        }
+                    }
+                }
+            },
+        );
     }
 
     pub(super) fn render_lingq_panel(&mut self, ui: &mut egui::Ui) {
@@ -721,13 +832,9 @@ impl SoziopolisLingqGui {
                 self.load_collections();
             }
             if ui.button("Select not uploaded").clicked() {
-                self.lingq_selected_articles = self
-                    .filtered_library_articles()
-                    .unwrap_or_else(|_| self.library_articles.clone())
-                    .iter()
-                    .filter(|article| !article.uploaded_to_lingq)
-                    .map(|article| article.id)
-                    .collect();
+                if let Err(err) = self.select_all_matching_not_uploaded_articles() {
+                    self.set_notice(err, NoticeKind::Error);
+                }
             }
             ui.label("Min");
             ui.add(

@@ -1,6 +1,13 @@
 use super::*;
 
 impl SoziopolisLingqGui {
+    pub(super) fn invalidate_browse_visibility_cache(&mut self) {
+        self.browse_view_revision = self.browse_view_revision.wrapping_add(1);
+        self.browse_visible_cache_revision = u64::MAX;
+        self.browse_visible_cache_query.clear();
+        self.browse_visible_cache_indices.clear();
+    }
+
     pub(super) fn app_context(&self) -> Result<AppContext, String> {
         self.app_context.clone().ok_or_else(|| {
             self.app_context_error
@@ -80,6 +87,15 @@ impl SoziopolisLingqGui {
         self.library_search_cache_results.clear();
     }
 
+    pub(super) fn invalidate_library_view_cache(&mut self) {
+        self.library_data_revision = self.library_data_revision.wrapping_add(1);
+        self.library_filtered_cache_revision = u64::MAX;
+        self.library_filtered_cache_key.clear();
+        self.library_filtered_cache_results.clear();
+        self.library_page_cache_key.clear();
+        self.library_page_cache = None;
+    }
+
     pub(super) fn refresh_local_library_stats(&mut self) {
         self.library_stats = Some(compute_local_library_stats(&self.library_articles));
     }
@@ -87,6 +103,8 @@ impl SoziopolisLingqGui {
     pub(super) fn apply_imported_articles(&mut self, mut saved_articles: Vec<ArticleListItem>) {
         if saved_articles.is_empty() {
             self.invalidate_library_search_cache();
+            self.invalidate_library_view_cache();
+            self.invalidate_browse_visibility_cache();
             return;
         }
 
@@ -98,6 +116,8 @@ impl SoziopolisLingqGui {
             .retain(|existing| !saved_articles.iter().any(|saved| saved.id == existing.id));
         self.library_articles.append(&mut saved_articles);
         self.invalidate_library_search_cache();
+        self.invalidate_library_view_cache();
+        self.invalidate_browse_visibility_cache();
         self.refresh_local_library_stats();
     }
 
@@ -118,6 +138,7 @@ impl SoziopolisLingqGui {
             }
         }
         self.invalidate_library_search_cache();
+        self.invalidate_library_view_cache();
         self.refresh_local_library_stats();
     }
 
@@ -143,6 +164,8 @@ impl SoziopolisLingqGui {
             .take()
             .filter(|article| article.id != article_id);
         self.invalidate_library_search_cache();
+        self.invalidate_library_view_cache();
+        self.invalidate_browse_visibility_cache();
         self.refresh_local_library_stats();
     }
 
@@ -150,28 +173,46 @@ impl SoziopolisLingqGui {
         !self.browse_imported_urls.contains(&article.url)
     }
 
-    pub(super) fn browse_article_is_visible(&self, article: &ArticleSummary) -> bool {
-        let passes_new = !self.browse_only_new || self.browse_article_passes_new_filter(article);
+    pub(super) fn visible_browse_article_indices(&mut self) -> Vec<usize> {
         let search = self.browse_search.trim().to_lowercase();
-        let passes_search = if search.is_empty() {
-            true
-        } else {
-            [
-                article.title.as_str(),
-                article.teaser.as_str(),
-                article.author.as_str(),
-                article.date.as_str(),
-                article.section.as_str(),
-                article.url.as_str(),
-            ]
-            .iter()
-            .any(|field| field.to_lowercase().contains(&search))
-        };
+        if self.browse_visible_cache_revision != self.browse_view_revision
+            || self.browse_visible_cache_query != search
+            || self.browse_visible_cache_only_new != self.browse_only_new
+        {
+            self.browse_visible_cache_indices = self
+                .browse_articles
+                .iter()
+                .enumerate()
+                .filter_map(|(index, article)| {
+                    let passes_new =
+                        !self.browse_only_new || self.browse_article_passes_new_filter(article);
+                    let passes_search = if search.is_empty() {
+                        true
+                    } else {
+                        [
+                            article.title.as_str(),
+                            article.teaser.as_str(),
+                            article.author.as_str(),
+                            article.date.as_str(),
+                            article.section.as_str(),
+                            article.url.as_str(),
+                        ]
+                        .iter()
+                        .any(|field| field.to_lowercase().contains(&search))
+                    };
 
-        passes_new && passes_search
+                    (passes_new && passes_search).then_some(index)
+                })
+                .collect();
+            self.browse_visible_cache_revision = self.browse_view_revision;
+            self.browse_visible_cache_query = search;
+            self.browse_visible_cache_only_new = self.browse_only_new;
+        }
+
+        self.browse_visible_cache_indices.clone()
     }
 
-    pub(super) fn filtered_library_articles(&mut self) -> Result<Vec<ArticleListItem>, String> {
+    pub(super) fn library_word_filters(&self) -> Result<(Option<usize>, Option<usize>), String> {
         let min_words = parse_optional_positive_usize_input(
             &self.library_word_count_min,
             "Library minimum words",
@@ -181,15 +222,148 @@ impl SoziopolisLingqGui {
             "Library maximum words",
         )?;
 
-        if let (Some(min_words), Some(max_words)) = (min_words, max_words) {
-            if min_words > max_words {
-                return Err(
-                    "Library minimum words must be less than or equal to maximum words.".to_owned(),
-                );
-            }
+        if let (Some(min_words), Some(max_words)) = (min_words, max_words)
+            && min_words > max_words
+        {
+            return Err(
+                "Library minimum words must be less than or equal to maximum words.".to_owned(),
+            );
         }
 
+        Ok((min_words, max_words))
+    }
+
+    pub(super) fn library_uses_paged_query(&self) -> bool {
+        self.library_topic.trim().is_empty()
+    }
+
+    pub(super) fn ensure_library_page_cache(&mut self) -> Result<(), String> {
+        if !self.library_uses_paged_query() {
+            self.library_page_cache = None;
+            self.library_page_cache_key.clear();
+            return Ok(());
+        }
+
+        let (min_words, max_words) = self.library_word_filters()?;
         let trimmed_search = self.library_search.trim();
+        let offset = self
+            .library_page_index
+            .saturating_mul(self.library_page_size);
+        let cache_key = format!(
+            "{}|{}|{}|{}|{}|{}|{}|{}",
+            self.library_data_revision,
+            trimmed_search,
+            self.library_only_not_uploaded,
+            self.library_word_count_min.trim(),
+            self.library_word_count_max.trim(),
+            self.library_sort_mode.label(),
+            offset,
+            self.library_page_size
+        );
+
+        if self.library_page_cache_key == cache_key && self.library_page_cache.is_some() {
+            return Ok(());
+        }
+
+        let app_context = self.app_context()?;
+        let mut page = commands::list_library_cards_page(
+            &app_context,
+            (!trimmed_search.is_empty()).then_some(trimmed_search),
+            None,
+            self.library_only_not_uploaded,
+            min_words,
+            max_words,
+            self.library_sort_mode,
+            offset,
+            self.library_page_size,
+        )
+        .map_err(|err| err.to_string())?;
+
+        if page.total_count > 0 && page.offset >= page.total_count {
+            self.library_page_index = (page.total_count - 1) / self.library_page_size.max(1);
+            let new_offset = self
+                .library_page_index
+                .saturating_mul(self.library_page_size);
+            page = commands::list_library_cards_page(
+                &app_context,
+                (!trimmed_search.is_empty()).then_some(trimmed_search),
+                None,
+                self.library_only_not_uploaded,
+                min_words,
+                max_words,
+                self.library_sort_mode,
+                new_offset,
+                self.library_page_size,
+            )
+            .map_err(|err| err.to_string())?;
+        }
+
+        self.library_page_cache_key = format!(
+            "{}|{}|{}|{}|{}|{}|{}|{}",
+            self.library_data_revision,
+            trimmed_search,
+            self.library_only_not_uploaded,
+            self.library_word_count_min.trim(),
+            self.library_word_count_max.trim(),
+            self.library_sort_mode.label(),
+            page.offset,
+            self.library_page_size
+        );
+        self.library_page_cache = Some(page);
+        Ok(())
+    }
+
+    pub(super) fn select_all_matching_not_uploaded_articles(&mut self) -> Result<(), String> {
+        if !self.library_uses_paged_query() {
+            self.ensure_filtered_library_cache()?;
+            self.lingq_selected_articles = self
+                .library_filtered_cache_results
+                .iter()
+                .filter(|article| !article.uploaded_to_lingq)
+                .map(|article| article.id)
+                .collect();
+            return Ok(());
+        }
+
+        let (min_words, max_words) = self.library_word_filters()?;
+        let trimmed_search = self.library_search.trim();
+        let app_context = self.app_context()?;
+        self.lingq_selected_articles = commands::list_matching_library_card_ids(
+            &app_context,
+            (!trimmed_search.is_empty()).then_some(trimmed_search),
+            None,
+            true,
+            min_words,
+            max_words,
+        )
+        .map_err(|err| err.to_string())?
+        .into_iter()
+        .collect();
+        Ok(())
+    }
+
+    pub(super) fn ensure_filtered_library_cache(&mut self) -> Result<(), String> {
+        let (min_words, max_words) = self.library_word_filters()?;
+
+        let trimmed_search = self.library_search.trim();
+        let cache_key = format!(
+            "{}|{}|{}|{}|{}|{}|{}|{}",
+            self.library_data_revision,
+            trimmed_search,
+            self.library_topic.trim(),
+            self.library_only_not_uploaded,
+            self.library_word_count_min.trim(),
+            self.library_word_count_max.trim(),
+            self.library_group_by_topic,
+            self.library_sort_mode.label()
+        );
+
+        if self.library_filtered_cache_revision == self.library_data_revision
+            && self.library_filtered_cache_key == cache_key
+        {
+            return Ok(());
+        }
+
         let mut articles = if trimmed_search.is_empty() {
             self.library_articles.clone()
         } else {
@@ -230,7 +404,11 @@ impl SoziopolisLingqGui {
             primary.then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
         });
 
-        Ok(articles)
+        self.library_filtered_cache_results = articles;
+        self.library_filtered_cache_revision = self.library_data_revision;
+        self.library_filtered_cache_key = cache_key;
+
+        Ok(())
     }
 }
 
@@ -397,6 +575,14 @@ pub(super) fn render_library_article_dense_row(
             });
         });
     });
+}
+
+pub(super) fn browse_card_row_height() -> f32 {
+    112.0
+}
+
+pub(super) fn library_card_row_height(dense_mode: bool) -> f32 {
+    if dense_mode { 84.0 } else { 136.0 }
 }
 
 pub(super) fn truncate_for_ui(value: &str, max_chars: usize) -> String {
@@ -742,6 +928,10 @@ pub(super) fn create_support_bundle(app: &SoziopolisLingqGui) -> Result<PathBuf,
     summary.push(format!("Queued jobs: {}", app.queued_jobs.len()));
     summary.push(format!("Recent jobs: {}", app.completed_jobs.len()));
     summary.push(format!(
+        "Recent task failures: {}",
+        app.recent_task_failures.len()
+    ));
+    summary.push(format!(
         "LingQ connected: {}",
         if app.lingq_connected { "yes" } else { "no" }
     ));
@@ -766,6 +956,13 @@ pub(super) fn create_support_bundle(app: &SoziopolisLingqGui) -> Result<PathBuf,
         "recent_jobs": &app.completed_jobs,
         "failed_imports": &app.failed_fetches,
         "failed_uploads": &app.last_failed_uploads,
+        "recent_task_failures": app.recent_task_failures.iter().map(|failure| serde_json::json!({
+            "kind": failure.kind.label(),
+            "operation": &failure.operation,
+            "message": &failure.message,
+            "details": &failure.details,
+            "recorded_at": &failure.recorded_at,
+        })).collect::<Vec<_>>(),
         "library_stats": app.library_stats.as_ref().map(|stats| serde_json::json!({
             "total_articles": stats.total_articles,
             "uploaded_articles": stats.uploaded_articles,
@@ -936,20 +1133,19 @@ pub(super) fn render_import_progress(ui: &mut egui::Ui, progress: &ImportProgres
         }
     });
 
-    let mut bar = ProgressBar::new(fraction.unwrap_or(0.0))
-        .text(match progress.total {
-            Some(total) => format!(
-                "{}: {}/{}",
-                truncate_for_ui(&progress.phase, 20),
-                progress.processed,
-                total
-            ),
-            None => format!(
-                "{}: {}",
-                truncate_for_ui(&progress.phase, 20),
-                progress.processed
-            ),
-        });
+    let mut bar = ProgressBar::new(fraction.unwrap_or(0.0)).text(match progress.total {
+        Some(total) => format!(
+            "{}: {}/{}",
+            truncate_for_ui(&progress.phase, 20),
+            progress.processed,
+            total
+        ),
+        None => format!(
+            "{}: {}",
+            truncate_for_ui(&progress.phase, 20),
+            progress.processed
+        ),
+    });
 
     if fraction.is_none() {
         bar = bar.animate(true);

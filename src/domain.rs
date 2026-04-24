@@ -1,3 +1,24 @@
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LibrarySortMode {
+    Newest,
+    Oldest,
+    Longest,
+    Shortest,
+    Title,
+}
+
+impl LibrarySortMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Newest => "Newest",
+            Self::Oldest => "Oldest",
+            Self::Longest => "Longest",
+            Self::Shortest => "Shortest",
+            Self::Title => "Title",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ArticleListItem {
     pub id: i64,
@@ -16,6 +37,14 @@ pub struct ArticleListItem {
     pub uploaded_to_lingq: bool,
     pub lingq_lesson_id: Option<i64>,
     pub lingq_lesson_url: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ArticleListPage {
+    pub items: Vec<ArticleListItem>,
+    pub total_count: usize,
+    pub offset: usize,
+    pub limit: usize,
 }
 
 impl From<crate::database::StoredArticle> for ArticleListItem {

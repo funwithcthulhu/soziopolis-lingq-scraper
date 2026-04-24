@@ -1,7 +1,7 @@
 use super::*;
 
 impl SoziopolisLingqGui {
-    fn handle_browse_loaded(&mut self, request_id: u64, result: Result<BrowseResponse, String>) {
+    fn handle_browse_loaded(&mut self, request_id: u64, result: Result<BrowseResponse, AppError>) {
         if request_id != self.browse_request_id {
             logging::warn(format!(
                 "discarded stale browse result for request {request_id}; current request is {}",
@@ -21,8 +21,9 @@ impl SoziopolisLingqGui {
                 self.browse_articles = result.articles;
                 self.browse_end_reached = result.exhausted;
                 self.browse_session_state = result.session_state;
+                self.invalidate_browse_visibility_cache();
             }
-            Err(err) => self.set_notice(err, NoticeKind::Error),
+            Err(err) => self.set_task_error_notice(err),
         }
     }
 
@@ -79,6 +80,15 @@ impl SoziopolisLingqGui {
                 },
             );
         } else {
+            if saved_count == 0 {
+                self.record_task_failure(
+                    AppError::classify("import selected articles", failed[0].message.clone())
+                        .with_details(format!(
+                            "Category: {}; Title: {}; URL: {}",
+                            failed[0].category, failed[0].title, failed[0].url
+                        )),
+                );
+            }
             self.set_notice(
                 format_import_result_summary(
                     saved_count,
@@ -121,6 +131,7 @@ impl SoziopolisLingqGui {
                     urls.len()
                 ));
                 self.browse_imported_urls = urls;
+                self.invalidate_browse_visibility_cache();
             }
             Err(err) => failures.push(format!("imported URL cache: {err}")),
         }
@@ -132,8 +143,8 @@ impl SoziopolisLingqGui {
                     articles.len()
                 ));
                 self.library_articles = articles;
-                self.library_search_cache_query.clear();
-                self.library_search_cache_results.clear();
+                self.invalidate_library_search_cache();
+                self.invalidate_library_view_cache();
             }
             Err(err) => failures.push(format!("library articles: {err}")),
         }
@@ -155,6 +166,14 @@ impl SoziopolisLingqGui {
                 failures.len(),
                 failures.join(" | ")
             ));
+            self.record_task_failure(
+                AppError::new(
+                    AppErrorKind::Database,
+                    format!("content refresh after {reason}"),
+                    failures[0].clone(),
+                )
+                .with_details(failures.join(" | ")),
+            );
             self.set_notice(
                 format!(
                     "Refresh after {reason} finished with {} issue(s). First error: {}",
@@ -170,7 +189,7 @@ impl SoziopolisLingqGui {
         }
     }
 
-    fn handle_lingq_logged_in(&mut self, result: Result<String, String>) {
+    fn handle_lingq_logged_in(&mut self, result: Result<String, AppError>) {
         match result {
             Ok(token) => {
                 self.lingq_api_key = token;
@@ -183,12 +202,12 @@ impl SoziopolisLingqGui {
             }
             Err(err) => {
                 self.lingq_loading_collections = false;
-                self.set_notice(err, NoticeKind::Error);
+                self.set_task_error_notice(err);
             }
         }
     }
 
-    fn handle_collections_loaded(&mut self, result: Result<Vec<Collection>, String>) {
+    fn handle_collections_loaded(&mut self, result: Result<Vec<Collection>, AppError>) {
         self.lingq_loading_collections = false;
         match result {
             Ok(collections) => {
@@ -204,7 +223,7 @@ impl SoziopolisLingqGui {
             }
             Err(err) => {
                 self.lingq_connected = false;
-                self.set_notice(err, NoticeKind::Error);
+                self.set_task_error_notice(err);
             }
         }
     }
@@ -255,6 +274,13 @@ impl SoziopolisLingqGui {
                 },
             );
         } else {
+            if uploaded == 0 {
+                self.record_task_failure(
+                    AppError::classify("upload to LingQ", failed[0].message.clone()).with_details(
+                        format!("Article #{}: {}", failed[0].article_id, failed[0].title),
+                    ),
+                );
+            }
             self.set_notice(
                 format!(
                     "{} Uploaded {uploaded} article(s); {} failed. First error: {}",
@@ -290,7 +316,7 @@ impl SoziopolisLingqGui {
                         }
                         Err(err) => {
                             self.show_preview = false;
-                            self.set_notice(err, NoticeKind::Error);
+                            self.set_task_error_notice(err);
                         }
                     }
                 }

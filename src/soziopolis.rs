@@ -26,33 +26,25 @@ const HTML_DISK_CACHE_TTL: Duration = Duration::from_secs(900);
 const HTML_CACHE_CAPACITY: usize = 96;
 const HTML_DISK_CACHE_FILE_CAPACITY: usize = 160;
 
-#[path = "soziopolis/types.rs"]
-mod types;
 #[path = "soziopolis/cache.rs"]
 mod cache;
 #[path = "soziopolis/parse.rs"]
 mod parse;
+#[path = "soziopolis/types.rs"]
+mod types;
 
 use types::{CachedHtml, ListingMetadata};
 
 pub use types::{
-    AllSectionsBrowseState,
-    Article,
-    ArticleMetadata,
-    ArticleSummary,
-    BrowseSectionResult,
-    DiscoveryReport,
-    DiscoverySourceKind,
-    Section,
-    SectionBrowseState,
-    SECTIONS,
+    AllSectionsBrowseState, Article, ArticleMetadata, ArticleSummary, BrowseSectionResult,
+    DiscoveryReport, DiscoverySourceKind, SECTIONS, Section, SectionBrowseState,
 };
 
-use cache::*;
-use parse::*;
 pub use cache::clear_browse_cache;
+use cache::*;
 pub(crate) use parse::build_clean_text;
 pub use parse::normalize_article_date;
+use parse::*;
 
 static HTML_CACHE: OnceLock<Mutex<HashMap<String, CachedHtml>>> = OnceLock::new();
 static SUMMARY_CACHE: OnceLock<Mutex<HashMap<String, Vec<ArticleSummary>>>> = OnceLock::new();

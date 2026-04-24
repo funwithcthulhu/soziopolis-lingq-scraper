@@ -57,27 +57,6 @@ pub(super) enum LingqAuthMode {
     Token,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum LibrarySortMode {
-    Newest,
-    Oldest,
-    Longest,
-    Shortest,
-    Title,
-}
-
-impl LibrarySortMode {
-    pub(super) fn label(self) -> &'static str {
-        match self {
-            Self::Newest => "Newest",
-            Self::Oldest => "Oldest",
-            Self::Longest => "Longest",
-            Self::Shortest => "Shortest",
-            Self::Title => "Title",
-        }
-    }
-}
-
 pub(super) struct Notice {
     pub(super) message: String,
     pub(super) kind: NoticeKind,
@@ -93,15 +72,15 @@ pub(super) struct ActiveJob {
     pub(super) succeeded: usize,
     pub(super) failed: usize,
     pub(super) current_item: String,
-    pub(super) cancel_flag: Arc<AtomicBool>,
+    pub(super) task_handle: AppTaskHandle,
 }
 
 pub(super) enum AppEvent {
     BrowseLoaded {
         request_id: u64,
-        result: Result<BrowseResponse, String>,
+        result: Result<BrowseResponse, AppError>,
     },
-    PreviewLoaded(Result<Article, String>),
+    PreviewLoaded(Result<Article, AppError>),
     BatchFetchProgress(ImportProgress),
     BatchFetched {
         job_id: u64,
@@ -117,8 +96,8 @@ pub(super) enum AppEvent {
         reason: String,
         result: ContentRefreshResult,
     },
-    LingqLoggedIn(Result<String, String>),
-    CollectionsLoaded(Result<Vec<Collection>, String>),
+    LingqLoggedIn(Result<String, AppError>),
+    CollectionsLoaded(Result<Vec<Collection>, AppError>),
     UploadProgress {
         job_id: u64,
         progress: UploadProgress,
@@ -135,7 +114,7 @@ pub(super) enum AppEvent {
 pub struct SoziopolisLingqGui {
     pub(super) app_context: Option<AppContext>,
     pub(super) app_context_error: Option<String>,
-    pub(super) tx: Sender<AppEvent>,
+    pub(super) task_runtime: AppTaskRuntime,
     pub(super) rx: Receiver<AppEvent>,
     pub(super) settings: SettingsStore,
     pub(super) current_view: View,
@@ -156,6 +135,11 @@ pub struct SoziopolisLingqGui {
     pub(super) browse_loading: bool,
     pub(super) browse_end_reached: bool,
     pub(super) browse_session_state: Option<BrowseSessionState>,
+    pub(super) browse_view_revision: u64,
+    pub(super) browse_visible_cache_revision: u64,
+    pub(super) browse_visible_cache_query: String,
+    pub(super) browse_visible_cache_only_new: bool,
+    pub(super) browse_visible_cache_indices: Vec<usize>,
     pub(super) batch_fetching: bool,
     pub(super) failed_fetches: Vec<FailedFetchItem>,
     pub(super) import_progress: Option<ImportProgress>,
@@ -177,8 +161,16 @@ pub struct SoziopolisLingqGui {
     pub(super) library_sort_mode: LibrarySortMode,
     pub(super) library_filters_expanded: bool,
     pub(super) library_dense_mode: bool,
+    pub(super) library_page_index: usize,
+    pub(super) library_page_size: usize,
+    pub(super) library_data_revision: u64,
     pub(super) library_search_cache_query: String,
     pub(super) library_search_cache_results: Vec<ArticleListItem>,
+    pub(super) library_filtered_cache_revision: u64,
+    pub(super) library_filtered_cache_key: String,
+    pub(super) library_filtered_cache_results: Vec<ArticleListItem>,
+    pub(super) library_page_cache_key: String,
+    pub(super) library_page_cache: Option<ArticleListPage>,
     pub(super) article_detail: Option<StoredArticle>,
 
     pub(super) lingq_api_key: String,
@@ -202,5 +194,6 @@ pub struct SoziopolisLingqGui {
     pub(super) queued_jobs: VecDeque<QueuedJob>,
     pub(super) completed_jobs: VecDeque<CompletedJob>,
     pub(super) last_failed_uploads: Vec<UploadFailure>,
+    pub(super) recent_task_failures: VecDeque<AppError>,
     pub(super) diagnostics_selected_job_id: Option<u64>,
 }

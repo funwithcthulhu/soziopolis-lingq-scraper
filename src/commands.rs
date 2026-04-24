@@ -1,6 +1,9 @@
 use crate::{
-    context::AppContext, domain::ArticleListItem, repositories::ArticleRepository,
-    services::ContentRefreshResult, soziopolis,
+    context::AppContext,
+    domain::{ArticleListItem, ArticleListPage, LibrarySortMode},
+    repositories::ArticleRepository,
+    services::ContentRefreshResult,
+    soziopolis,
 };
 use anyhow::Result;
 
@@ -17,6 +20,52 @@ pub fn search_library_cards(
     ctx.db.with_db(|db| {
         let repository = ArticleRepository::new(db);
         repository.list_article_cards(search, section, only_not_uploaded)
+    })
+}
+
+pub fn list_library_cards_page(
+    ctx: &AppContext,
+    search: Option<&str>,
+    section: Option<&str>,
+    only_not_uploaded: bool,
+    min_words: Option<usize>,
+    max_words: Option<usize>,
+    sort_mode: LibrarySortMode,
+    offset: usize,
+    limit: usize,
+) -> Result<ArticleListPage> {
+    ctx.db.with_db(|db| {
+        let repository = ArticleRepository::new(db);
+        repository.list_article_cards_page(
+            search,
+            section,
+            only_not_uploaded,
+            min_words,
+            max_words,
+            sort_mode,
+            offset,
+            limit,
+        )
+    })
+}
+
+pub fn list_matching_library_card_ids(
+    ctx: &AppContext,
+    search: Option<&str>,
+    section: Option<&str>,
+    only_not_uploaded: bool,
+    min_words: Option<usize>,
+    max_words: Option<usize>,
+) -> Result<Vec<i64>> {
+    ctx.db.with_db(|db| {
+        let repository = ArticleRepository::new(db);
+        repository.list_matching_article_card_ids(
+            search,
+            section,
+            only_not_uploaded,
+            min_words,
+            max_words,
+        )
     })
 }
 

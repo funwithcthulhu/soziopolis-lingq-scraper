@@ -6,164 +6,175 @@ impl SoziopolisLingqGui {
         let log_path = app_paths::app_log_path().ok();
         let exe_path = std::env::current_exe().ok();
 
-        ui.heading("Diagnostics");
-        ui.add_space(8.0);
-        framed_panel(ui, |ui| {
-            let credential_status = credential_store::load_lingq_api_key()
-                .ok()
-                .flatten()
-                .map(|_| "available")
-                .unwrap_or("not found");
-            ui.horizontal_wrapped(|ui| {
-                ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
-                if let Some(path) = &data_dir {
-                    ui.label(format!("Data: {}", path.display()));
-                }
-                ui.label(format!("Credential Manager: {}", credential_status));
-                let perf = crate::perf::snapshot();
-                ui.label(format!(
-                    "Browse cache H/M: {}/{}",
-                    perf.browse_cache_hits, perf.browse_cache_misses
-                ));
-                ui.label(format!(
-                    "Summary cache H/M: {}/{}",
-                    perf.browse_summary_cache_hits, perf.browse_summary_cache_misses
-                ));
-            });
-            ui.horizontal_wrapped(|ui| {
-                if ui.button("Open data folder").clicked() {
-                    if let Some(path) = &data_dir {
-                        if let Err(err) = open_path_in_explorer(path) {
-                            self.set_notice(err, NoticeKind::Error);
+        ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.heading("Diagnostics");
+                ui.add_space(8.0);
+                framed_panel(ui, |ui| {
+                    let credential_status = credential_store::load_lingq_api_key()
+                        .ok()
+                        .flatten()
+                        .map(|_| "available")
+                        .unwrap_or("not found");
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+                        if let Some(path) = &data_dir {
+                            ui.label(format!("Data: {}", path.display()));
                         }
-                    }
-                }
-                if ui.button("Open log file").clicked() {
-                    if let Some(path) = &log_path {
-                        if let Err(err) = open_log_in_notepad(path) {
-                            self.set_notice(err, NoticeKind::Error);
-                        }
-                    }
-                }
-                if ui.button("Copy recent log").clicked() {
-                    match read_recent_log_excerpt(30) {
-                        Ok(text) => {
-                            ui.ctx().copy_text(text);
-                            self.set_notice("Copied recent log lines.", NoticeKind::Success);
-                        }
-                        Err(err) => self.set_notice(err, NoticeKind::Error),
-                    }
-                }
-                if ui.button("Create support bundle").clicked() {
-                    match create_support_bundle(self) {
-                        Ok(path) => {
-                            if let Err(err) = open_path_in_explorer(&path) {
-                                self.set_notice(
-                                    format!(
-                                        "Created support bundle at {}, but could not open it: {err}",
-                                        path.display()
-                                    ),
-                                    NoticeKind::Info,
-                                );
-                            } else {
-                                self.set_notice(
-                                    format!("Created support bundle at {}.", path.display()),
-                                    NoticeKind::Success,
-                                );
+                        ui.label(format!("Credential Manager: {}", credential_status));
+                        let perf = crate::perf::snapshot();
+                        ui.label(format!(
+                            "Browse cache H/M: {}/{}",
+                            perf.browse_cache_hits, perf.browse_cache_misses
+                        ));
+                        ui.label(format!(
+                            "Summary cache H/M: {}/{}",
+                            perf.browse_summary_cache_hits, perf.browse_summary_cache_misses
+                        ));
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.button("Open data folder").clicked() {
+                            if let Some(path) = &data_dir {
+                                if let Err(err) = open_path_in_explorer(path) {
+                                    self.set_notice(err, NoticeKind::Error);
+                                }
                             }
                         }
-                        Err(err) => self.set_notice(err, NoticeKind::Error),
-                    }
-                }
-                if ui.button("Clear browse cache").clicked() {
-                    match commands::clear_browse_cache() {
-                        Ok(removed) => {
-                            self.set_notice(
-                                format!("Cleared {} cached browse file(s).", removed),
-                                NoticeKind::Success,
-                            );
+                        if ui.button("Open log file").clicked() {
+                            if let Some(path) = &log_path {
+                                if let Err(err) = open_log_in_notepad(path) {
+                                    self.set_notice(err, NoticeKind::Error);
+                                }
+                            }
                         }
-                        Err(err) => self.set_notice(err.to_string(), NoticeKind::Error),
-                    }
-                }
-                if ui.button("Compact local data").clicked() {
-                    match self
-                        .app_context()
-                        .map_err(anyhow::Error::msg)
-                        .and_then(|ctx| commands::compact_local_data(&ctx))
-                    {
-                        Ok(()) => {
-                            self.set_notice(
-                                "Compacted the local database and trimmed the SQLite WAL.",
-                                NoticeKind::Success,
-                            );
+                        if ui.button("Copy recent log").clicked() {
+                            match read_recent_log_excerpt(30) {
+                                Ok(text) => {
+                                    ui.ctx().copy_text(text);
+                                    self.set_notice("Copied recent log lines.", NoticeKind::Success);
+                                }
+                                Err(err) => self.set_notice(err, NoticeKind::Error),
+                            }
                         }
-                        Err(err) => self.set_notice(err.to_string(), NoticeKind::Error),
-                    }
-                }
-                if ui.button("Rebuild search index").clicked() {
-                    match self
-                        .app_context()
-                        .map_err(anyhow::Error::msg)
-                        .and_then(|ctx| commands::rebuild_search_index(&ctx))
-                    {
-                        Ok(()) => {
-                            self.set_notice("Rebuilt the local search index.", NoticeKind::Success)
+                        if ui.button("Create support bundle").clicked() {
+                            match create_support_bundle(self) {
+                                Ok(path) => {
+                                    if let Err(err) = open_path_in_explorer(&path) {
+                                        self.set_notice(
+                                            format!(
+                                                "Created support bundle at {}, but could not open it: {err}",
+                                                path.display()
+                                            ),
+                                            NoticeKind::Info,
+                                        );
+                                    } else {
+                                        self.set_notice(
+                                            format!("Created support bundle at {}.", path.display()),
+                                            NoticeKind::Success,
+                                        );
+                                    }
+                                }
+                                Err(err) => self.set_notice(err, NoticeKind::Error),
+                            }
                         }
-                        Err(err) => self.set_notice(err.to_string(), NoticeKind::Error),
-                    }
-                }
-                if ui.button("Verify database").clicked() {
-                    match self
-                        .app_context()
-                        .map_err(anyhow::Error::msg)
-                        .and_then(|ctx| commands::verify_database(&ctx))
-                    {
-                        Ok(result) => {
-                            self.set_notice(
-                                format!("SQLite integrity check: {result}"),
-                                NoticeKind::Info,
-                            )
+                        if ui.button("Clear browse cache").clicked() {
+                            match commands::clear_browse_cache() {
+                                Ok(removed) => {
+                                    self.set_notice(
+                                        format!("Cleared {} cached browse file(s).", removed),
+                                        NoticeKind::Success,
+                                    );
+                                }
+                                Err(err) => self.set_notice(err.to_string(), NoticeKind::Error),
+                            }
                         }
-                        Err(err) => self.set_notice(err.to_string(), NoticeKind::Error),
-                    }
-                }
-            });
-            if let Some(path) = &exe_path {
-                ui.small(
-                    RichText::new(format!("Executable: {}", path.display()))
-                        .color(Color32::from_gray(165)),
-                );
-            }
-            if let Some(path) = &log_path {
-                ui.small(
-                    RichText::new(format!("Log: {}", path.display()))
-                        .color(Color32::from_gray(165)),
-                );
-            }
-        });
-
-        ui.add_space(10.0);
-        self.render_jobs_diagnostics_panel(ui);
-
-        ui.add_space(10.0);
-        self.render_failure_diagnostics_panel(ui);
-
-        ui.add_space(10.0);
-        framed_panel(ui, |ui| {
-            ui.label(RichText::new("Recent log excerpt").strong());
-            ui.add_space(6.0);
-            match read_recent_log_excerpt(18) {
-                Ok(text) => {
-                    ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
-                        ui.code(text);
+                        if ui.button("Compact local data").clicked() {
+                            match self
+                                .app_context()
+                                .map_err(anyhow::Error::msg)
+                                .and_then(|ctx| commands::compact_local_data(&ctx))
+                            {
+                                Ok(()) => {
+                                    self.set_notice(
+                                        "Compacted the local database and trimmed the SQLite WAL.",
+                                        NoticeKind::Success,
+                                    );
+                                }
+                                Err(err) => self.set_notice(err.to_string(), NoticeKind::Error),
+                            }
+                        }
+                        if ui.button("Rebuild search index").clicked() {
+                            match self
+                                .app_context()
+                                .map_err(anyhow::Error::msg)
+                                .and_then(|ctx| commands::rebuild_search_index(&ctx))
+                            {
+                                Ok(()) => {
+                                    self.set_notice(
+                                        "Rebuilt the local search index.",
+                                        NoticeKind::Success,
+                                    )
+                                }
+                                Err(err) => self.set_notice(err.to_string(), NoticeKind::Error),
+                            }
+                        }
+                        if ui.button("Verify database").clicked() {
+                            match self
+                                .app_context()
+                                .map_err(anyhow::Error::msg)
+                                .and_then(|ctx| commands::verify_database(&ctx))
+                            {
+                                Ok(result) => {
+                                    self.set_notice(
+                                        format!("SQLite integrity check: {result}"),
+                                        NoticeKind::Info,
+                                    )
+                                }
+                                Err(err) => self.set_notice(err.to_string(), NoticeKind::Error),
+                            }
+                        }
                     });
-                }
-                Err(err) => {
-                    ui.small(RichText::new(err).color(Color32::from_rgb(238, 100, 100)));
-                }
-            }
-        });
+                    if let Some(path) = &exe_path {
+                        ui.small(
+                            RichText::new(format!("Executable: {}", path.display()))
+                                .color(Color32::from_gray(165)),
+                        );
+                    }
+                    if let Some(path) = &log_path {
+                        ui.small(
+                            RichText::new(format!("Log: {}", path.display()))
+                                .color(Color32::from_gray(165)),
+                        );
+                    }
+                });
+
+                ui.add_space(10.0);
+                self.render_jobs_diagnostics_panel(ui);
+
+                ui.add_space(10.0);
+                self.render_failure_diagnostics_panel(ui);
+
+                ui.add_space(10.0);
+                self.render_task_failure_diagnostics_panel(ui);
+
+                ui.add_space(10.0);
+                framed_panel(ui, |ui| {
+                    ui.label(RichText::new("Recent log excerpt").strong());
+                    ui.add_space(6.0);
+                    match read_recent_log_excerpt(18) {
+                        Ok(text) => {
+                            ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                                ui.code(text);
+                            });
+                        }
+                        Err(err) => {
+                            ui.small(RichText::new(err).color(Color32::from_rgb(238, 100, 100)));
+                        }
+                    }
+                });
+                ui.add_space(12.0);
+            });
     }
 
     fn render_jobs_diagnostics_panel(&mut self, ui: &mut egui::Ui) {
@@ -437,6 +448,59 @@ impl SoziopolisLingqGui {
                             }
                         }
                     });
+            });
+        });
+    }
+
+    fn render_task_failure_diagnostics_panel(&mut self, ui: &mut egui::Ui) {
+        framed_panel(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("Recent task failures").strong());
+                ui.small(format!(
+                    "{} retained item(s)",
+                    self.recent_task_failures.len()
+                ));
+                if ui
+                    .add_enabled(
+                        !self.recent_task_failures.is_empty(),
+                        egui::Button::new("Clear task failures"),
+                    )
+                    .clicked()
+                {
+                    self.recent_task_failures.clear();
+                    self.set_notice("Cleared retained task failures.", NoticeKind::Info);
+                }
+            });
+            ui.add_space(6.0);
+            ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                if self.recent_task_failures.is_empty() {
+                    ui.small(
+                        RichText::new("No retained task failures.").color(Color32::from_gray(150)),
+                    );
+                } else {
+                    for failure in &self.recent_task_failures {
+                        ui.label(
+                            RichText::new(format!(
+                                "[{}] {}",
+                                failure.kind.label(),
+                                failure.operation
+                            ))
+                            .strong(),
+                        );
+                        ui.small(
+                            RichText::new(format_job_timestamp(&failure.recorded_at))
+                                .color(Color32::from_gray(150)),
+                        );
+                        ui.small(&failure.message);
+                        if let Some(details) = &failure.details {
+                            ui.small(
+                                RichText::new(truncate_for_ui(details, 180))
+                                    .color(Color32::from_gray(155)),
+                            );
+                        }
+                        ui.add_space(8.0);
+                    }
+                }
             });
         });
     }

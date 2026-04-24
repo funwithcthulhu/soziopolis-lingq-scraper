@@ -1,6 +1,6 @@
 [package]
 name = "soziopolis_lingq_tool"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 
 [dependencies]
@@ -19,3 +19,6 @@ webbrowser = "1.0"
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3.6", features = ["windows-native"] }
+
+[build-dependencies]
+winres = "0.1"

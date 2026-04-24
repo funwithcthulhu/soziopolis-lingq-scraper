@@ -4,6 +4,7 @@ impl SoziopolisLingqGui {
     pub(super) fn new(cc: &eframe::CreationContext<'_>) -> Self {
         configure_theme(&cc.egui_ctx);
         let (tx, rx) = mpsc::channel();
+        let task_runtime = AppTaskRuntime::new(tx.clone());
         let (settings, settings_notice) = match SettingsStore::load_default() {
             Ok(settings) => (settings, None),
             Err(err) => {
@@ -47,7 +48,7 @@ impl SoziopolisLingqGui {
         let mut app = Self {
             app_context,
             app_context_error,
-            tx,
+            task_runtime,
             rx,
             settings,
             current_view,
@@ -67,6 +68,11 @@ impl SoziopolisLingqGui {
             browse_loading: false,
             browse_end_reached: false,
             browse_session_state: None,
+            browse_view_revision: 0,
+            browse_visible_cache_revision: u64::MAX,
+            browse_visible_cache_query: String::new(),
+            browse_visible_cache_only_new: false,
+            browse_visible_cache_indices: Vec::new(),
             batch_fetching: false,
             failed_fetches: Vec::new(),
             import_progress: None,
@@ -87,8 +93,16 @@ impl SoziopolisLingqGui {
             library_sort_mode: LibrarySortMode::Newest,
             library_filters_expanded: true,
             library_dense_mode: false,
+            library_page_index: 0,
+            library_page_size: 120,
+            library_data_revision: 0,
             library_search_cache_query: String::new(),
             library_search_cache_results: Vec::new(),
+            library_filtered_cache_revision: u64::MAX,
+            library_filtered_cache_key: String::new(),
+            library_filtered_cache_results: Vec::new(),
+            library_page_cache_key: String::new(),
+            library_page_cache: None,
             article_detail: None,
             lingq_api_key,
             lingq_auth_mode: LingqAuthMode::Account,
@@ -110,6 +124,7 @@ impl SoziopolisLingqGui {
             queued_jobs: VecDeque::new(),
             completed_jobs: VecDeque::new(),
             last_failed_uploads: Vec::new(),
+            recent_task_failures: VecDeque::new(),
             diagnostics_selected_job_id: None,
         };
         app.load_persisted_queue_state();
