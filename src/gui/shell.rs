@@ -94,7 +94,6 @@ impl SoziopolisLingqGui {
             library_filters_expanded: true,
             library_dense_mode: false,
             library_page_index: 0,
-            library_page_size: 120,
             library_data_revision: 0,
             library_search_cache_query: String::new(),
             library_search_cache_results: Vec::new(),

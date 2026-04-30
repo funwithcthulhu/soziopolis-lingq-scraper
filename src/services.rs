@@ -25,6 +25,7 @@ const MAX_IMPORT_WORKERS: usize = 4;
 const DEFAULT_MAX_UPLOAD_WORKERS: usize = 2;
 const TESTED_MAX_UPLOAD_WORKERS: usize = 3;
 
+#[derive(Debug, Clone)]
 pub struct ContentRefreshResult {
     pub imported_urls: Result<HashSet<String>, String>,
     pub library_articles: Result<Vec<ArticleListItem>, String>,
@@ -47,6 +48,7 @@ pub struct UploadOutcome {
     pub canceled: bool,
 }
 
+#[derive(Debug, Clone)]
 pub struct BrowseResponse {
     pub articles: Vec<ArticleSummary>,
     pub report: crate::soziopolis::DiscoveryReport,
@@ -54,7 +56,7 @@ pub struct BrowseResponse {
     pub session_state: Option<BrowseSessionState>,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum BrowseSessionState {
     CurrentSection(SectionBrowseState),
     AllSections(AllSectionsBrowseState),

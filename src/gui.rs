@@ -1,5 +1,5 @@
 use crate::{
-    app_error::{AppError, AppErrorKind},
+    app_error::AppError,
     app_paths, commands,
     context::AppContext,
     credential_store,
@@ -19,19 +19,22 @@ use crate::{
     soziopolis::{Article, ArticleSummary, DiscoveryReport, SECTIONS},
     topics::generated_topic_from_fields,
 };
-use chrono::NaiveDate;
-use eframe::egui::{
-    self, Align, Color32, Context, Frame, Layout, Margin, Panel, ProgressBar, RichText, ScrollArea,
-    Stroke, TextEdit, ViewportBuilder,
+
+use iced::widget::{
+    Column, Row, Space, button, checkbox, container, horizontal_rule, horizontal_space, pick_list,
+    progress_bar, row, scrollable, text, text_input,
 };
+// Use a macro alias to avoid ambiguity with std::column! in Rust 2024 edition
+macro_rules! wcolumn {
+    ($($arg:tt)*) => { iced::widget::column![$($arg)*] };
+}
+use iced::{Element, Length, Subscription, Task, Theme, clipboard};
+
 use std::{
-    any::Any,
     collections::{BTreeMap, HashSet, VecDeque},
     fs,
-    panic::{self, AssertUnwindSafe},
     path::PathBuf,
-    process::Command,
-    sync::mpsc::{self, Receiver, Sender},
+    process::Command as SysCommand,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -39,39 +42,23 @@ use std::{
     time::{Duration, Instant},
 };
 
-mod actions;
-mod diagnostics;
-mod events;
 mod helpers;
-mod jobs;
-mod shell;
+mod message;
 mod state;
+mod style;
 mod tasks;
+mod update;
 mod views;
 
 use helpers::*;
+use message::*;
 use state::*;
-use tasks::*;
+use style::*;
 
-pub fn run() -> eframe::Result<()> {
-    if let Ok(log_path) = logging::init() {
-        logging::info(format!(
-            "GUI run requested; log path {}",
-            log_path.display()
-        ));
-    }
-    let options = eframe::NativeOptions {
-        viewport: ViewportBuilder::default()
-            .with_inner_size([1480.0, 920.0])
-            .with_min_inner_size([1024.0, 720.0])
-            .with_maximized(true)
-            .with_title("Soziopolis Reader"),
-        ..Default::default()
-    };
-
-    eframe::run_native(
-        "Soziopolis Reader",
-        options,
-        Box::new(|cc| Ok(Box::new(SoziopolisLingqGui::new(cc)))),
-    )
+pub fn run() -> iced::Result {
+    iced::application("Soziopolis Reader", App::update, App::view)
+        .theme(App::theme)
+        .subscription(App::subscription)
+        .window_size(iced::Size::new(1480.0, 920.0))
+        .run_with(App::new)
 }
