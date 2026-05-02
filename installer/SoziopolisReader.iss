@@ -3,7 +3,7 @@
 #define MyAppURL "https://github.com/funwithcthulhu/soziopolis-lingq-scraper"
 #define MyAppExeName "Soziopolis Reader.exe"
 #ifndef AppVersion
-  #define AppVersion "1.0.0"
+  #define AppVersion "1.1.0"
 #endif
 #ifndef StageDir
   #define StageDir "."

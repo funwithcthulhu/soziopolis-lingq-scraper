@@ -97,7 +97,7 @@ That script will:
 - compile `installer\SoziopolisReader.iss`
 - output an installer like:
 
-`dist\SoziopolisReaderSetup-1.0.0.exe`
+`dist\SoziopolisReaderSetup-1.1.0.exe`
 
 You can also point it at a specific Inno Setup compiler path:
 
