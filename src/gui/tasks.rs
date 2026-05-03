@@ -21,24 +21,71 @@ async fn async_std_yield() {
     Yield(false).await;
 }
 
+fn describe_panic_payload(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_owned()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "non-string panic payload".to_owned()
+    }
+}
+
+fn execute_blocking_task<T>(
+    task_kind: &'static str,
+    task_label: &str,
+    f: impl FnOnce() -> T,
+) -> Result<T, AppError> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(result) => Ok(result),
+        Err(payload) => Err(AppError::internal_task(
+            task_kind,
+            task_label,
+            format!(
+                "background worker panicked: {}",
+                describe_panic_payload(payload)
+            ),
+        )),
+    }
+}
+
 /// Run a blocking closure on a background thread, returning a future.
-pub(super) async fn run_blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+pub(super) async fn run_blocking<T: Send + 'static>(
+    task_kind: &'static str,
+    task_label: impl Into<String>,
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, AppError> {
+    let task_label = task_label.into();
+    let task_label_for_thread = task_label.clone();
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     std::thread::spawn(move || {
-        let _ = tx.send(f());
+        let result = execute_blocking_task(task_kind, &task_label_for_thread, f);
+        let _ = tx.send(result);
     });
     // Poll in a yielding loop — iced runs this on its async executor.
     loop {
         match rx.try_recv() {
             Ok(result) => return result,
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                panic!("blocking task thread panicked");
+                return Err(AppError::internal_task(
+                    task_kind,
+                    &task_label,
+                    "background worker stopped before returning a result",
+                ));
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 async_std_yield().await;
             }
         }
     }
+}
+
+pub(super) async fn run_blocking_app_result<T: Send + 'static>(
+    task_kind: &'static str,
+    task_label: impl Into<String>,
+    f: impl FnOnce() -> Result<T, AppError> + Send + 'static,
+) -> Result<T, AppError> {
+    run_blocking(task_kind, task_label, f).await?
 }
 
 impl App {
@@ -110,7 +157,7 @@ impl App {
         let section = self.browse_section.clone();
         let limit = self.browse_limit;
         Task::perform(
-            run_blocking(move || {
+            run_blocking_app_result("browse", format!("section {section}"), move || {
                 BrowseService::browse_section(&section, limit)
                     .map_err(|err| AppError::classify("browse section", err.to_string()))
             }),
@@ -130,7 +177,7 @@ impl App {
         let request_id = self.browse_request_id;
         let limit = self.browse_limit;
         Task::perform(
-            run_blocking(move || {
+            run_blocking_app_result("browse", "all sections", move || {
                 BrowseService::browse_all_sections(limit)
                     .map_err(|err| AppError::classify("browse all sections", err.to_string()))
             }),
@@ -150,13 +197,15 @@ impl App {
         let limit = self.browse_limit;
 
         match self.browse_session_state.clone() {
-            Some(BrowseSessionState::CurrentSection(state)) => Task::perform(
-                run_blocking(move || {
+            Some(BrowseSessionState::CurrentSection(state)) => {
+                let task_label = format!("load more {}", self.browse_section);
+                Task::perform(
+                run_blocking_app_result("browse", task_label, move || {
                     BrowseService::continue_browse_section(state, limit)
                         .map_err(|err| AppError::classify("continue browse", err.to_string()))
                 }),
                 move |result| Message::BrowseLoaded { request_id, result },
-            ),
+            )}
             _ => self.spawn_browse_refresh(),
         }
     }
@@ -174,7 +223,7 @@ impl App {
 
         match self.browse_session_state.clone() {
             Some(BrowseSessionState::AllSections(state)) => Task::perform(
-                run_blocking(move || {
+                run_blocking_app_result("browse", "load more all sections", move || {
                     BrowseService::continue_browse_all_sections(state, limit)
                         .map_err(|err| AppError::classify("continue browse all", err.to_string()))
                 }),
@@ -191,10 +240,25 @@ impl App {
         self.content_refresh_request_id = self.content_refresh_request_id.wrapping_add(1);
         let request_id = self.content_refresh_request_id;
         let reason = reason.to_owned();
+        let task_label = reason.clone();
+        let completion_reason = reason.clone();
         let app_context = self.app_context().ok();
         Task::perform(
-            run_blocking(move || build_content_refresh_event(app_context, request_id, reason)),
-            |event| event,
+            run_blocking("content refresh", task_label, move || {
+                build_content_refresh_result(app_context)
+            }),
+            move |result| match result {
+                Ok(result) => Message::ContentRefreshCompleted {
+                    request_id,
+                    reason: completion_reason.clone(),
+                    result,
+                },
+                Err(error) => Message::ContentRefreshFailed {
+                    request_id,
+                    reason: completion_reason.clone(),
+                    error,
+                },
+            },
         )
     }
 
@@ -205,9 +269,10 @@ impl App {
         self.show_preview = true;
         self.preview_article = None;
         self.preview_stored_article = None;
+        let task_label = url.clone();
         let app_context = self.app_context().ok();
         Task::perform(
-            run_blocking(move || {
+            run_blocking_app_result("preview", task_label, move || {
                 let article = BrowseService::preview_article(&url)
                     .map_err(|err| AppError::classify("preview article", err.to_string()))?;
                 let stored = app_context.and_then(|ctx| {
@@ -241,7 +306,7 @@ impl App {
         self.lingq_loading_collections = true;
         let api_key = self.lingq_api_key.clone();
         Task::perform(
-            run_blocking(move || {
+            run_blocking_app_result("lingq", "load collections", move || {
                 LingqService::collections(&api_key, "de")
                     .map_err(|err| AppError::classify("load LingQ courses", err.to_string()))
             }),
@@ -259,7 +324,7 @@ impl App {
         let password = self.lingq_password.clone();
         self.lingq_password.clear();
         Task::perform(
-            run_blocking(move || {
+            run_blocking_app_result("lingq", format!("login {username}"), move || {
                 LingqService::login(&username, &password)
                     .map_err(|err| AppError::classify("LingQ login", err.to_string()))
             }),
@@ -282,7 +347,7 @@ impl App {
             .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
 
         Task::perform(
-            run_blocking(move || {
+            run_blocking("import", format!("job #{job_id}"), move || {
                 let result = app_context
                     .ok_or_else(|| anyhow::anyhow!("Database unavailable"))
                     .and_then(|ctx| {
@@ -320,7 +385,23 @@ impl App {
                     },
                 }
             }),
-            |msg| msg,
+            move |result| match result {
+                Ok(msg) => msg,
+                Err(error) => Message::BatchFetched {
+                    job_id,
+                    saved_count: 0,
+                    saved_articles: Vec::new(),
+                    skipped_existing: 0,
+                    skipped_out_of_range: 0,
+                    failed: vec![FailedFetchItem {
+                        url: String::new(),
+                        title: "Internal task".to_owned(),
+                        category: "internal".to_owned(),
+                        message: error.notice_message(),
+                    }],
+                    canceled: false,
+                },
+            },
         )
     }
 
@@ -339,7 +420,7 @@ impl App {
             .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
 
         Task::perform(
-            run_blocking(move || {
+            run_blocking("upload", format!("job #{job_id}"), move || {
                 let result = app_context
                     .ok_or_else(|| anyhow::anyhow!("Database unavailable"))
                     .and_then(|ctx| {
@@ -374,7 +455,20 @@ impl App {
                     },
                 }
             }),
-            |msg| msg,
+            move |result| match result {
+                Ok(msg) => msg,
+                Err(error) => Message::BatchUploaded {
+                    job_id,
+                    uploaded: 0,
+                    successes: Vec::new(),
+                    failed: vec![UploadFailure {
+                        article_id: 0,
+                        title: "Internal task".to_owned(),
+                        message: error.notice_message(),
+                    }],
+                    canceled: false,
+                },
+            },
         )
     }
 
@@ -531,22 +625,35 @@ impl App {
     }
 }
 
-fn build_content_refresh_event(
-    app_context: Option<AppContext>,
-    request_id: u64,
-    reason: String,
-) -> Message {
-    let result = app_context
+fn build_content_refresh_result(app_context: Option<AppContext>) -> ContentRefreshResult {
+    app_context
         .ok_or_else(|| anyhow::anyhow!("Database unavailable"))
         .and_then(|ctx| commands::refresh_content(&ctx))
         .unwrap_or_else(|err| ContentRefreshResult {
             imported_urls: Err(err.to_string()),
             library_articles: Err(err.to_string()),
             library_stats: Err(err.to_string()),
-        });
-    Message::ContentRefreshCompleted {
-        request_id,
-        reason,
-        result,
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::execute_blocking_task;
+    use crate::app_error::AppErrorKind;
+
+    #[test]
+    fn execute_blocking_task_returns_result_when_work_succeeds() {
+        let value = execute_blocking_task("browse", "test task", || 42)
+            .expect("successful task should return its value");
+        assert_eq!(value, 42);
+    }
+
+    #[test]
+    fn execute_blocking_task_turns_panics_into_internal_errors() {
+        let error = execute_blocking_task("browse", "test task", || panic!("boom"))
+            .expect_err("panic should become an app error");
+        assert_eq!(error.kind, AppErrorKind::Internal);
+        assert!(error.message.contains("background worker panicked: boom"));
+        assert_eq!(error.details.as_deref(), Some("Task label: test task"));
     }
 }

@@ -99,6 +99,11 @@ pub(super) enum Message {
         reason: String,
         result: ContentRefreshResult,
     },
+    ContentRefreshFailed {
+        request_id: u64,
+        reason: String,
+        error: AppError,
+    },
 
     // Job queue
     CancelActiveJob,

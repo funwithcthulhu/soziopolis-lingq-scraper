@@ -447,6 +447,16 @@ impl App {
                     .as_ref()
                     .map(|j| j.label.clone())
                     .unwrap_or_else(|| "Import job".to_owned());
+                if let Some(internal_failure) = failed
+                    .first()
+                    .filter(|item| item.category == "internal")
+                {
+                    self.record_task_failure(AppError::internal_task(
+                        "import",
+                        &job_label,
+                        internal_failure.message.clone(),
+                    ));
+                }
                 self.batch_fetching = false;
                 self.import_progress = None;
                 self.failed_fetches = failed.clone();
@@ -529,6 +539,16 @@ impl App {
                     .as_ref()
                     .map(|j| j.label.clone())
                     .unwrap_or_else(|| "Upload job".to_owned());
+                if let Some(internal_failure) = failed
+                    .first()
+                    .filter(|item| item.article_id == 0 && item.title == "Internal task")
+                {
+                    self.record_task_failure(AppError::internal_task(
+                        "upload",
+                        &job_label,
+                        internal_failure.message.clone(),
+                    ));
+                }
                 self.lingq_uploading = false;
                 self.upload_progress = None;
                 self.apply_uploaded_articles(&successes);
@@ -618,6 +638,20 @@ impl App {
                 }
                 Task::none()
             }
+            Message::ContentRefreshFailed {
+                request_id,
+                reason,
+                error,
+            } => {
+                if request_id != self.content_refresh_request_id {
+                    return Task::none();
+                }
+                self.library_loading = false;
+                self.set_task_error_notice(
+                    error.with_details(format!("Refresh trigger: {reason}")),
+                );
+                Task::none()
+            }
 
             // ── Job queue ───────────────────────────────────────
             Message::CancelActiveJob => {
@@ -674,6 +708,7 @@ impl App {
                 let articles: Vec<ArticleSummary> = self
                     .failed_fetches
                     .iter()
+                    .filter(|item| !item.url.trim().is_empty())
                     .map(|item| ArticleSummary {
                         url: item.url.clone(),
                         title: item.title.clone(),
@@ -685,6 +720,13 @@ impl App {
                         source_label: String::new(),
                     })
                     .collect();
+                if articles.is_empty() {
+                    self.set_notice(
+                        "No retryable import URLs are available. Check Diagnostics for the internal task failure.",
+                        NoticeKind::Error,
+                    );
+                    return Task::none();
+                }
                 let total = articles.len();
                 let job = QueuedJob {
                     id: self.next_job_id(),
@@ -705,6 +747,13 @@ impl App {
                     .iter()
                     .filter_map(|item| (item.article_id > 0).then_some(item.article_id))
                     .collect();
+                if ids.is_empty() {
+                    self.set_notice(
+                        "No retryable uploads are available. Check Diagnostics for the internal task failure.",
+                        NoticeKind::Error,
+                    );
+                    return Task::none();
+                }
                 let collection = self.lingq_selected_collection;
                 let total = ids.len();
                 let job = QueuedJob {
