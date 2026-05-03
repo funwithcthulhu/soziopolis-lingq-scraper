@@ -20,8 +20,12 @@ pub fn data_dir() -> Result<PathBuf> {
         return ensure_dir(&path);
     }
 
-    let mut base_dir =
-        dirs::data_local_dir().unwrap_or_else(|| PathBuf::from(r"C:\Users\Admin\AppData\Local"));
+    let mut base_dir = resolve_base_data_root(
+        dirs::data_local_dir(),
+        std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
+        std::env::current_dir().ok(),
+        std::env::temp_dir(),
+    );
     base_dir.push("soziopolis_lingq_tool");
     ensure_dir(&base_dir)
 }
@@ -61,8 +65,55 @@ fn portable_data_dir_from_exe() -> Option<PathBuf> {
     None
 }
 
+fn resolve_base_data_root(
+    platform_dir: Option<PathBuf>,
+    env_dir: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+    temp_dir: PathBuf,
+) -> PathBuf {
+    platform_dir.or(env_dir).or(cwd).unwrap_or(temp_dir)
+}
+
 fn ensure_dir(path: &PathBuf) -> Result<PathBuf> {
     std::fs::create_dir_all(path)
         .with_context(|| format!("failed to create {}", path.display()))?;
     Ok(path.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_base_data_root;
+    use std::path::PathBuf;
+
+    #[test]
+    fn resolve_base_data_root_prefers_platform_dir() {
+        let platform = PathBuf::from(r"C:\Users\Alice\AppData\Local");
+        let env_dir = PathBuf::from(r"D:\Fallback");
+        let cwd = PathBuf::from(r"E:\Workspace");
+
+        let resolved = resolve_base_data_root(
+            Some(platform.clone()),
+            Some(env_dir),
+            Some(cwd),
+            PathBuf::from(r"F:\Temp"),
+        );
+
+        assert_eq!(resolved, platform);
+    }
+
+    #[test]
+    fn resolve_base_data_root_falls_back_without_hardcoded_user_path() {
+        let env_dir = PathBuf::from(r"D:\LocalAppData");
+        let cwd = PathBuf::from(r"E:\Workspace");
+
+        let resolved = resolve_base_data_root(
+            None,
+            Some(env_dir.clone()),
+            Some(cwd),
+            PathBuf::from(r"F:\Temp"),
+        );
+
+        assert_eq!(resolved, env_dir);
+        assert!(!resolved.to_string_lossy().contains(r"\Users\Admin\"));
+    }
 }

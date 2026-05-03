@@ -170,6 +170,8 @@ impl BrowseService {
         let mut processed = 0usize;
         let mut pending = Vec::new();
         let mut fetched_articles = Vec::new();
+        let mut seen_requested_urls = HashSet::new();
+        let mut seen_batch_fingerprints = HashSet::new();
 
         for summary in articles {
             let current_item = if summary.title.is_empty() {
@@ -177,6 +179,22 @@ impl BrowseService {
             } else {
                 summary.title.clone()
             };
+
+            if !seen_requested_urls.insert(summary.url.clone()) {
+                skipped_existing += 1;
+                processed += 1;
+                on_progress(ImportProgress {
+                    phase: "Scanning selected articles".to_owned(),
+                    processed,
+                    total: Some(total),
+                    saved_count,
+                    skipped_existing,
+                    skipped_out_of_range: 0,
+                    failed_count: failed.len(),
+                    current_item,
+                });
+                continue;
+            }
 
             if known_urls.contains(&summary.url) {
                 skipped_existing += 1;
@@ -216,6 +234,21 @@ impl BrowseService {
                 processed += 1;
                 match result.outcome {
                     Ok(article) => {
+                        if !remember_article_fingerprint(&mut seen_batch_fingerprints, &article) {
+                            skipped_existing += 1;
+                            on_progress(ImportProgress {
+                                phase: "Fetching selected articles".to_owned(),
+                                processed,
+                                total: Some(total),
+                                saved_count,
+                                skipped_existing,
+                                skipped_out_of_range: 0,
+                                failed_count: failed.len(),
+                                current_item: result.current_item,
+                            });
+                            continue;
+                        }
+
                         let fingerprint = crate::database::debug_article_fingerprint(&article);
                         let duplicate = shared_db
                             .with_db(|db| {
@@ -466,6 +499,18 @@ fn fetch_article_for_import(
     Ok(article)
 }
 
+fn remember_article_fingerprint(
+    seen_fingerprints: &mut HashSet<String>,
+    article: &Article,
+) -> bool {
+    let fingerprint = crate::database::debug_article_fingerprint(article);
+    if fingerprint.trim().is_empty() {
+        return true;
+    }
+
+    seen_fingerprints.insert(fingerprint)
+}
+
 fn import_worker_count(pending_items: usize) -> usize {
     pending_items.clamp(1, MAX_IMPORT_WORKERS)
 }
@@ -561,7 +606,31 @@ fn worker_upload_articles(
 
 #[cfg(test)]
 mod tests {
-    use super::{configured_upload_worker_cap_from_env, import_worker_count, upload_worker_count};
+    use super::{
+        configured_upload_worker_cap_from_env, import_worker_count,
+        remember_article_fingerprint, upload_worker_count,
+    };
+    use crate::soziopolis::{Article, DiscoverySourceKind};
+    use std::collections::HashSet;
+
+    fn sample_article(url: &str) -> Article {
+        Article {
+            url: url.to_owned(),
+            title: "Sample".to_owned(),
+            subtitle: String::new(),
+            teaser: "Teaser".to_owned(),
+            author: "Author".to_owned(),
+            date: "2026-05-03".to_owned(),
+            published_at: "2026-05-03".to_owned(),
+            section: "Essay".to_owned(),
+            source_kind: DiscoverySourceKind::Section.as_str().to_owned(),
+            source_label: "Essays".to_owned(),
+            body_text: "One two three.".to_owned(),
+            clean_text: String::new(),
+            word_count: 3,
+            fetched_at: "2026-05-03T12:00:00Z".to_owned(),
+        }
+    }
 
     #[test]
     fn import_worker_count_is_bounded() {
@@ -584,6 +653,16 @@ mod tests {
         assert_eq!(configured_upload_worker_cap_from_env(None), 2);
         assert_eq!(configured_upload_worker_cap_from_env(Some("3")), 3);
         assert_eq!(configured_upload_worker_cap_from_env(Some("5")), 3);
+    }
+
+    #[test]
+    fn remember_article_fingerprint_rejects_duplicate_content_in_same_batch() {
+        let mut seen = HashSet::new();
+        let first = sample_article("https://example.com/first");
+        let second = sample_article("https://example.com/second");
+
+        assert!(remember_article_fingerprint(&mut seen, &first));
+        assert!(!remember_article_fingerprint(&mut seen, &second));
     }
 }
 
