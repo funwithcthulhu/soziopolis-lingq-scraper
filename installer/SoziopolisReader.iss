@@ -1,6 +1,6 @@
 #define MyAppName "Soziopolis Reader"
 #define MyAppPublisher "Soziopolis Reader contributors"
-#define MyAppURL "https://github.com/funwithcthulhu/soziopolis-lingq-scraper"
+#define MyAppURL "https://github.com/funwithcthulhu/soziopolis-reader"
 #define MyAppExeName "Soziopolis Reader.exe"
 #ifndef AppVersion
   #define AppVersion "1.1.0"

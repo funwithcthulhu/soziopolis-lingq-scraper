@@ -1,111 +1,90 @@
 # Soziopolis Reader
 
-A Rust-based desktop and CLI app for working with articles from `soziopolis.de`:
+Soziopolis Reader is a Windows-first Rust desktop app for browsing articles from `soziopolis.de`, saving them into a local SQLite library, and uploading selected pieces to LingQ.
 
-- browse Soziopolis sections
-- extract clean full article text
-- save articles into a local SQLite library
-- upload saved articles to LingQ
+It pairs a desktop workflow with a small CLI, so you can use it as a reader, a personal archive, or a LingQ import pipeline.
 
-## Getting Started
+## Highlights
 
-### 1. Clone the repo
+- Browse Soziopolis sections and paginate through article listings
+- Extract clean article text from individual pages
+- Keep a searchable local SQLite library with filters, preview, and stats
+- Upload saved articles to LingQ with stored credentials and collection selection
+- Retry failed imports/uploads and manage a persisted job queue
+- Build a portable folder or a normal Windows installer
+- Generate diagnostics bundles with logs, settings, and queue snapshots
+
+## Download
+
+The easiest way to get started is from the latest GitHub release:
+
+- Releases: <https://github.com/funwithcthulhu/soziopolis-reader/releases>
+- Latest Windows installer: <https://github.com/funwithcthulhu/soziopolis-reader/releases/latest>
+
+Current packaged release: `v1.1.0`
+
+## Quick Start
+
+### Install from GitHub Releases
+
+1. Open the latest release page.
+2. Download `SoziopolisReaderSetup-<version>.exe`.
+3. Run the installer.
+4. Launch `Soziopolis Reader` from Start Menu or the desktop shortcut if you enabled it.
+
+### First-run flow
+
+1. Open `Browse Articles`.
+2. Choose a Soziopolis section and load articles.
+3. Select the articles you want and click `Fetch & Save`.
+4. Open `LingQ Settings` and connect your LingQ account or token.
+5. Go to `My Library`, choose a LingQ collection, select saved articles, and upload them.
+
+The app keeps a local article library in SQLite, so once an article is imported you can preview, filter, and upload it later without fetching it again.
+
+## Build From Source
+
+### 1. Clone the repository
 
 ```powershell
-git clone <YOUR_GIT_URL_HERE>
-cd soziopolis_lingq_tool
+git clone https://github.com/funwithcthulhu/soziopolis-reader.git
+cd soziopolis-reader
 ```
 
-If you already downloaded the repo as a ZIP instead of cloning, extract it somewhere like:
+If you downloaded a ZIP instead of cloning, extract it somewhere convenient such as:
 
-`C:\projects\soziopolis_lingq_tool`
+`C:\projects\soziopolis_reader`
 
 ### 2. Install Rust
 
-This app is built with Rust. On Windows, install Rust from `rustup` and then reopen PowerShell.
-
-After installation, verify:
+Install Rust with `rustup`, then reopen PowerShell and verify:
 
 ```powershell
 rustc --version
 cargo --version
 ```
 
-### 3. Build and run the desktop app
-
-From the project folder:
+### 3. Run the desktop app
 
 ```powershell
 cargo run
 ```
 
-That launches the Soziopolis Reader GUI.
+This launches the GUI.
 
-To build an optimized executable:
+### 4. Build an optimized executable
 
 ```powershell
 cargo build --release
 ```
 
-The main executable will be created at:
+Cargo produces:
 
 `target\release\soziopolis_lingq_tool.exe`
 
-### 4. Use it to save Soziopolis articles and upload to LingQ
+The packaged Windows builds rename that executable to `Soziopolis Reader.exe` for distribution.
 
-Basic first-run flow:
-
-1. Launch the app with `cargo run` or the release executable.
-2. Go to `Browse Articles`.
-3. Pick a Soziopolis section and load articles.
-4. Select the articles you want and click `Fetch & Save`.
-5. Open `LingQ Settings` from the left sidebar and connect your LingQ account or token.
-6. Go to `My Library`, choose the LingQ course/collection you want, select saved articles, and upload them.
-
-The app keeps a local article library in SQLite, so after importing once you can browse, preview, filter, and upload later without re-fetching everything.
-
-### 5. Portable Windows build
-
-If you want a folder you can move to another Windows PC, run:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build-portable.ps1
-```
-
-That refreshes the portable app folders and Desktop shortcut. The portable copy stores:
-
-- the local article database
-- settings
-- queue and job history in SQLite
-- logs
-- diagnostics support bundles
-
-On a new PC, LingQ will usually need to be reconnected once because the token is stored in Windows Credential Manager on each machine.
-
-### 6. Windows installer build
-
-If you want a normal Windows installer that integrates with Start Menu, Apps & Features, and optional Desktop shortcuts, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1
-```
-
-That script will:
-
-- build the release executable
-- stage the installer files
-- compile `installer\SoziopolisReader.iss`
-- output an installer like:
-
-`dist\SoziopolisReaderSetup-1.1.0.exe`
-
-You can also point it at a specific Inno Setup compiler path:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1 -IsccPath "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-```
-
-## Commands
+## CLI Examples
 
 ```powershell
 cargo run -- sections
@@ -119,22 +98,63 @@ cargo run -- --data-dir C:\soziopolis-data library --limit 20
 ```
 
 You can also provide the LingQ token through `LINGQ_API_KEY`.
-If you have already connected LingQ in the desktop app on Windows, the CLI can also reuse the
-token stored in Windows Credential Manager.
+
+If you already connected LingQ in the desktop app on Windows, the CLI can reuse the token stored in Windows Credential Manager.
+
+## Windows Packaging
+
+### Portable bundle
+
+To refresh a portable folder build:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-portable.ps1 -NoDesktopShortcut
+```
+
+The portable copy stores:
+
+- the local article database
+- app settings
+- queue and job history in SQLite
+- logs
+- diagnostics support bundles
+
+On a new PC, LingQ usually needs to be reconnected once because the token is stored per-machine in Windows Credential Manager.
+
+### Installer build
+
+To build a normal Windows installer, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1
+```
+
+That script:
+
+- builds the release executable
+- stages the installer files
+- compiles `installer\SoziopolisReader.iss`
+- writes `dist\SoziopolisReaderSetup-<version>.exe`
+
+You can also point it at a specific compiler:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1 -IsccPath "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+```
 
 ## Storage
 
-The SQLite database is created at:
+By default the SQLite database lives at:
 
 `%LOCALAPPDATA%\soziopolis_lingq_tool\soziopolis_lingq_tool.db`
 
-You can override the data directory for either the GUI or CLI with:
+You can override the data directory for the GUI or CLI with:
 
 `--data-dir C:\path\to\your\data`
 
-The app also supports a simple portable layout automatically. If the executable sits beside a
-folder named `data` or `portable_data`, it will store settings and the SQLite database there
-instead of `%LOCALAPPDATA%`. The expected portable structure is:
+The app also supports a portable layout automatically. If the executable sits beside a folder named `data` or `portable_data`, it stores settings and the SQLite database there instead of `%LOCALAPPDATA%`.
+
+Expected portable structure:
 
 ```text
 Soziopolis Reader.exe
@@ -149,27 +169,15 @@ data/
 ```
 
 On Windows, LingQ tokens are stored in Windows Credential Manager rather than `settings.json`.
-That means a portable folder carries the library and app settings, but LingQ will need to be
-reconnected once on each new PC.
 
-Queued import/upload jobs, recent job history, and retry lists are persisted inside the SQLite database.
-The Diagnostics screen can also generate a timestamped support bundle folder with logs, settings,
-an exported queue snapshot, and a diagnostic summary for troubleshooting.
-Queue execution can be paused and resumed from Diagnostics, and you can force-start the next
-queued LingQ upload without resuming the whole queue.
+Queued import and upload jobs, recent job history, and retry lists are persisted inside the SQLite database. The `Diagnostics` screen can also generate a timestamped support bundle with logs, settings, a queue snapshot, and a diagnostic summary for troubleshooting.
 
-To refresh the portable folders and Desktop shortcut in one step, use:
+The internal storage folder keeps the historical `soziopolis_lingq_tool` name so existing installs and upgrades continue to find the same data.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build-portable.ps1
-```
+## Development Notes
 
-To build the standard Windows installer, use:
+- The app is currently packaged and tested as a Windows desktop application.
+- The scraper is tuned for Soziopolis article pages and section listings as they existed on April 16, 2026.
+- If the Soziopolis site layout changes, the scraping selectors may need an update.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1
-```
-
-## Notes
-
-The scraper is tuned for Soziopolis article pages and section listings as they exist on April 16, 2026. If the site layout changes later, the scraping selectors may need a refresh.
+Release workflow notes live in [docs/release-checklist.md](docs/release-checklist.md).

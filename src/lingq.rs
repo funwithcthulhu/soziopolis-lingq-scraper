@@ -69,7 +69,7 @@ pub struct LingqClient {
 impl LingqClient {
     pub fn new() -> Result<Self> {
         let client = Client::builder()
-            .user_agent("soziopolis_lingq_tool/0.1.0")
+            .user_agent(concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(LINGQ_CONNECT_TIMEOUT)
             .timeout(LINGQ_TIMEOUT)
             .build()
