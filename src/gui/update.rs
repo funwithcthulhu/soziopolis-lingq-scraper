@@ -156,7 +156,7 @@ impl App {
                 match self
                     .app_context()
                     .map_err(anyhow::Error::msg)
-                    .and_then(|ctx| commands::get_article_detail(&ctx, id))
+                    .and_then(|ctx| app_ops::get_article_detail(&ctx, id))
                 {
                     Ok(Some(article)) => {
                         self.preview_loading = false;
@@ -191,7 +191,7 @@ impl App {
                 match self
                     .app_context()
                     .map_err(anyhow::Error::msg)
-                    .and_then(|ctx| commands::get_article_detail(&ctx, id))
+                    .and_then(|ctx| app_ops::get_article_detail(&ctx, id))
                 {
                     Ok(Some(article)) => {
                         self.article_detail = Some(article);
@@ -275,7 +275,7 @@ impl App {
                 match self
                     .app_context()
                     .map_err(anyhow::Error::msg)
-                    .and_then(|ctx| commands::delete_article(&ctx, id))
+                    .and_then(|ctx| app_ops::delete_article(&ctx, id))
                 {
                     Ok(_) => {
                         self.remove_article_from_local_state(id);
@@ -447,9 +447,8 @@ impl App {
                     .as_ref()
                     .map(|j| j.label.clone())
                     .unwrap_or_else(|| "Import job".to_owned());
-                if let Some(internal_failure) = failed
-                    .first()
-                    .filter(|item| item.category == "internal")
+                if let Some(internal_failure) =
+                    failed.first().filter(|item| item.category == "internal")
                 {
                     self.record_task_failure(AppError::internal_task(
                         "import",
@@ -814,7 +813,7 @@ impl App {
                 Task::none()
             }
             Message::ClearBrowseCache => {
-                match commands::clear_browse_cache() {
+                match app_ops::clear_browse_cache() {
                     Ok(removed) => self.set_notice(
                         format!("Cleared {removed} cached file(s)."),
                         NoticeKind::Success,
@@ -827,7 +826,7 @@ impl App {
                 match self
                     .app_context()
                     .map_err(anyhow::Error::msg)
-                    .and_then(|ctx| commands::compact_local_data(&ctx))
+                    .and_then(|ctx| app_ops::compact_local_data(&ctx))
                 {
                     Ok(()) => self.set_notice("Compacted local database.", NoticeKind::Success),
                     Err(err) => self.set_notice(err.to_string(), NoticeKind::Error),
@@ -838,7 +837,7 @@ impl App {
                 match self
                     .app_context()
                     .map_err(anyhow::Error::msg)
-                    .and_then(|ctx| commands::rebuild_search_index(&ctx))
+                    .and_then(|ctx| app_ops::rebuild_search_index(&ctx))
                 {
                     Ok(()) => self.set_notice("Rebuilt search index.", NoticeKind::Success),
                     Err(err) => self.set_notice(err.to_string(), NoticeKind::Error),
@@ -849,7 +848,7 @@ impl App {
                 match self
                     .app_context()
                     .map_err(anyhow::Error::msg)
-                    .and_then(|ctx| commands::verify_database(&ctx))
+                    .and_then(|ctx| app_ops::verify_database(&ctx))
                 {
                     Ok(result) => {
                         self.set_notice(format!("Integrity check: {result}"), NoticeKind::Info)

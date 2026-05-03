@@ -2,7 +2,7 @@
 
 Soziopolis Reader is a Windows-first Rust desktop app for browsing articles from `soziopolis.de`, saving them into a local SQLite library, and uploading selected pieces to LingQ.
 
-It pairs a desktop workflow with a small CLI, so you can use it as a reader, a personal archive, or a LingQ import pipeline.
+It is intentionally GUI-first and GUI-only: browsing, importing, review, diagnostics, and LingQ uploads all happen inside the desktop app.
 
 ## Highlights
 
@@ -84,23 +84,6 @@ Cargo produces:
 
 The packaged Windows builds rename that executable to `Soziopolis Reader.exe` for distribution.
 
-## CLI Examples
-
-```powershell
-cargo run -- sections
-cargo run -- browse --section essays --limit 15
-cargo run -- browse-url --url https://www.soziopolis.de/texte/essay.html --limit 15
-cargo run -- fetch --url https://www.soziopolis.de/die-themen-liegen-auf-der-strasse.html
-cargo run -- fetch --url https://www.soziopolis.de/die-themen-liegen-auf-der-strasse.html --save
-cargo run -- library --limit 20
-cargo run -- upload --id 1 --api-key YOUR_LINGQ_API_KEY
-cargo run -- --data-dir C:\soziopolis-data library --limit 20
-```
-
-You can also provide the LingQ token through `LINGQ_API_KEY`.
-
-If you already connected LingQ in the desktop app on Windows, the CLI can reuse the token stored in Windows Credential Manager.
-
 ## Windows Packaging
 
 ### Portable bundle
@@ -148,10 +131,6 @@ By default the SQLite database lives at:
 
 `%LOCALAPPDATA%\soziopolis_lingq_tool\soziopolis_lingq_tool.db`
 
-You can override the data directory for the GUI or CLI with:
-
-`--data-dir C:\path\to\your\data`
-
 The app also supports a portable layout automatically. If the executable sits beside a folder named `data` or `portable_data`, it stores settings and the SQLite database there instead of `%LOCALAPPDATA%`.
 
 Expected portable structure:
@@ -173,6 +152,8 @@ On Windows, LingQ tokens are stored in Windows Credential Manager rather than `s
 Queued import and upload jobs, recent job history, and retry lists are persisted inside the SQLite database. The `Diagnostics` screen can also generate a timestamped support bundle with logs, settings, a queue snapshot, and a diagnostic summary for troubleshooting.
 
 The internal storage folder keeps the historical `soziopolis_lingq_tool` name so existing installs and upgrades continue to find the same data.
+
+If you want the app and its data in a custom location, use the portable layout instead of the default `%LOCALAPPDATA%` location.
 
 ## Development Notes
 

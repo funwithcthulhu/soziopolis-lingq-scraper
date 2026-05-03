@@ -1,5 +1,5 @@
 use soziopolis_lingq_tool::{
-    commands,
+    app_ops,
     context::AppContext,
     database::SharedDatabase,
     jobs::{
@@ -61,7 +61,7 @@ fn refresh_content_reports_saved_article_urls_and_stats() {
         })
         .expect("article should save");
 
-    let refreshed = commands::refresh_content(&ctx).expect("refresh should succeed");
+    let refreshed = app_ops::refresh_content(&ctx).expect("refresh should succeed");
     let imported_urls = refreshed
         .imported_urls
         .expect("imported url set should be available");
@@ -96,8 +96,8 @@ fn delete_article_updates_follow_up_refresh() {
         })
         .expect("article should save");
 
-    commands::delete_article(&ctx, article_id).expect("delete should succeed");
-    let refreshed = commands::refresh_content(&ctx).expect("refresh should succeed");
+    app_ops::delete_article(&ctx, article_id).expect("delete should succeed");
+    let refreshed = app_ops::refresh_content(&ctx).expect("refresh should succeed");
 
     assert!(
         refreshed

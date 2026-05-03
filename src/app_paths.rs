@@ -1,21 +1,7 @@
-use anyhow::{Context, Result, anyhow};
-use std::{path::PathBuf, sync::OnceLock};
-
-static DATA_DIR_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
-
-pub fn configure_data_dir(path: PathBuf) -> Result<()> {
-    ensure_dir(&path)?;
-    DATA_DIR_OVERRIDE
-        .set(path)
-        .map_err(|_| anyhow!("data directory already configured"))?;
-    Ok(())
-}
+use anyhow::{Context, Result};
+use std::path::PathBuf;
 
 pub fn data_dir() -> Result<PathBuf> {
-    if let Some(path) = DATA_DIR_OVERRIDE.get() {
-        return ensure_dir(path);
-    }
-
     if let Some(path) = portable_data_dir_from_exe() {
         return ensure_dir(&path);
     }

@@ -6,7 +6,7 @@ This is the release checklist for Soziopolis Reader.
 
 1. Update `Cargo.toml` version.
 2. Update `CHANGELOG.md`.
-3. Review `README.md` for any installer, CLI, or storage changes.
+3. Review `README.md` for any installer, GUI workflow, or storage changes.
 4. Make sure GitHub repo metadata still matches the product name and release story.
 
 ## Local verification

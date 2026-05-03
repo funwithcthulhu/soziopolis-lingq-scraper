@@ -79,7 +79,7 @@ impl SoziopolisLingqGui {
                             }
                         }
                         if ui.button("Clear browse cache").clicked() {
-                            match commands::clear_browse_cache() {
+                            match app_ops::clear_browse_cache() {
                                 Ok(removed) => {
                                     self.set_notice(
                                         format!("Cleared {} cached browse file(s).", removed),
@@ -93,7 +93,7 @@ impl SoziopolisLingqGui {
                             match self
                                 .app_context()
                                 .map_err(anyhow::Error::msg)
-                                .and_then(|ctx| commands::compact_local_data(&ctx))
+                                .and_then(|ctx| app_ops::compact_local_data(&ctx))
                             {
                                 Ok(()) => {
                                     self.set_notice(
@@ -108,7 +108,7 @@ impl SoziopolisLingqGui {
                             match self
                                 .app_context()
                                 .map_err(anyhow::Error::msg)
-                                .and_then(|ctx| commands::rebuild_search_index(&ctx))
+                                .and_then(|ctx| app_ops::rebuild_search_index(&ctx))
                             {
                                 Ok(()) => {
                                     self.set_notice(
@@ -123,7 +123,7 @@ impl SoziopolisLingqGui {
                             match self
                                 .app_context()
                                 .map_err(anyhow::Error::msg)
-                                .and_then(|ctx| commands::verify_database(&ctx))
+                                .and_then(|ctx| app_ops::verify_database(&ctx))
                             {
                                 Ok(result) => {
                                     self.set_notice(

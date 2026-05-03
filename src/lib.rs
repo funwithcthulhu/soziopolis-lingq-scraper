@@ -1,6 +1,6 @@
 pub mod app_error;
+pub mod app_ops;
 pub mod app_paths;
-pub mod commands;
 pub mod context;
 pub mod credential_store;
 pub mod database;

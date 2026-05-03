@@ -243,7 +243,7 @@ impl SoziopolisLingqGui {
         match self
             .app_context()
             .map_err(anyhow::Error::msg)
-            .and_then(|ctx| commands::get_article_detail(&ctx, article_id))
+            .and_then(|ctx| app_ops::get_article_detail(&ctx, article_id))
         {
             Ok(Some(article)) => {
                 self.preview_loading = false;
@@ -352,7 +352,7 @@ impl SoziopolisLingqGui {
         match self
             .app_context()
             .map_err(anyhow::Error::msg)
-            .and_then(|ctx| commands::get_article_detail(&ctx, article_id))
+            .and_then(|ctx| app_ops::get_article_detail(&ctx, article_id))
         {
             Ok(Some(article)) => {
                 self.article_detail = Some(article);

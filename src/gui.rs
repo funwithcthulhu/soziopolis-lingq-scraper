@@ -1,6 +1,6 @@
 use crate::{
     app_error::AppError,
-    app_paths, commands,
+    app_ops, app_paths,
     context::AppContext,
     credential_store,
     database::{LibraryStats, SectionCount, StoredArticle},

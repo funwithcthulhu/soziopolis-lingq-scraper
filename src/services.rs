@@ -607,8 +607,8 @@ fn worker_upload_articles(
 #[cfg(test)]
 mod tests {
     use super::{
-        configured_upload_worker_cap_from_env, import_worker_count,
-        remember_article_fingerprint, upload_worker_count,
+        configured_upload_worker_cap_from_env, import_worker_count, remember_article_fingerprint,
+        upload_worker_count,
     };
     use crate::soziopolis::{Article, DiscoverySourceKind};
     use std::collections::HashSet;

@@ -200,12 +200,13 @@ impl App {
             Some(BrowseSessionState::CurrentSection(state)) => {
                 let task_label = format!("load more {}", self.browse_section);
                 Task::perform(
-                run_blocking_app_result("browse", task_label, move || {
-                    BrowseService::continue_browse_section(state, limit)
-                        .map_err(|err| AppError::classify("continue browse", err.to_string()))
-                }),
-                move |result| Message::BrowseLoaded { request_id, result },
-            )}
+                    run_blocking_app_result("browse", task_label, move || {
+                        BrowseService::continue_browse_section(state, limit)
+                            .map_err(|err| AppError::classify("continue browse", err.to_string()))
+                    }),
+                    move |result| Message::BrowseLoaded { request_id, result },
+                )
+            }
             _ => self.spawn_browse_refresh(),
         }
     }
@@ -628,7 +629,7 @@ impl App {
 fn build_content_refresh_result(app_context: Option<AppContext>) -> ContentRefreshResult {
     app_context
         .ok_or_else(|| anyhow::anyhow!("Database unavailable"))
-        .and_then(|ctx| commands::refresh_content(&ctx))
+        .and_then(|ctx| app_ops::refresh_content(&ctx))
         .unwrap_or_else(|err| ContentRefreshResult {
             imported_urls: Err(err.to_string()),
             library_articles: Err(err.to_string()),
