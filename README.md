@@ -161,4 +161,10 @@ If you want the app and its data in a custom location, use the portable layout i
 - The scraper is tuned for Soziopolis article pages and section listings as they existed on April 16, 2026.
 - If the Soziopolis site layout changes, the scraping selectors may need an update.
 
-Release workflow notes live in [docs/release-checklist.md](docs/release-checklist.md).
+Additional project docs:
+
+- [Architecture](docs/architecture.md)
+- [Data Model](docs/data-model.md)
+- [Reliability Notes](docs/reliability.md)
+- [ADRs](docs/adr)
+- [Release Checklist](docs/release-checklist.md)

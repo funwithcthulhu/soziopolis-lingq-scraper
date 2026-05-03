@@ -12,6 +12,7 @@ pub struct StoredArticle {
     pub date: String,
     pub published_at: String,
     pub section: String,
+    pub generated_topic: String,
     pub source_kind: String,
     pub source_label: String,
     pub content_fingerprint: String,
@@ -48,10 +49,11 @@ pub(super) fn map_article_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Store
     let date: String = row.get(7)?;
     let published_at: String = row.get(8)?;
     let section: String = row.get(9)?;
-    let source_kind: String = row.get(10)?;
-    let source_label: String = row.get(11)?;
-    let content_fingerprint: String = row.get(12)?;
-    let body_text: String = row.get(13)?;
+    let generated_topic: String = row.get(10)?;
+    let source_kind: String = row.get(11)?;
+    let source_label: String = row.get(12)?;
+    let content_fingerprint: String = row.get(13)?;
+    let body_text: String = row.get(14)?;
     Ok(StoredArticle {
         id: row.get(0)?,
         url: row.get(1)?,
@@ -63,17 +65,18 @@ pub(super) fn map_article_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Store
         date: date.clone(),
         published_at,
         section,
+        generated_topic,
         source_kind,
         source_label,
         content_fingerprint,
         body_text: body_text.clone(),
         clean_text: build_clean_text(&title, &subtitle, &author, &date, &body_text),
-        word_count: row.get(14)?,
-        fetched_at: row.get(15)?,
-        custom_topic: row.get(16)?,
-        uploaded_to_lingq: row.get::<_, i64>(17)? != 0,
-        lingq_lesson_id: row.get(18)?,
-        lingq_lesson_url: row.get(19)?,
+        word_count: row.get(15)?,
+        fetched_at: row.get(16)?,
+        custom_topic: row.get(17)?,
+        uploaded_to_lingq: row.get::<_, i64>(18)? != 0,
+        lingq_lesson_id: row.get(19)?,
+        lingq_lesson_url: row.get(20)?,
     })
 }
 
@@ -89,12 +92,13 @@ pub(super) fn map_article_card_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<
         date: row.get(7)?,
         published_at: row.get(8)?,
         section: row.get(9)?,
-        word_count: row.get(10)?,
-        fetched_at: row.get(11)?,
-        custom_topic: row.get(12)?,
-        uploaded_to_lingq: row.get::<_, i64>(13)? != 0,
-        lingq_lesson_id: row.get(14)?,
-        lingq_lesson_url: row.get(15)?,
+        generated_topic: row.get(10)?,
+        word_count: row.get(11)?,
+        fetched_at: row.get(12)?,
+        custom_topic: row.get(13)?,
+        uploaded_to_lingq: row.get::<_, i64>(14)? != 0,
+        lingq_lesson_id: row.get(15)?,
+        lingq_lesson_url: row.get(16)?,
     })
 }
 
@@ -110,6 +114,24 @@ pub(super) fn build_article_fingerprint(article: &Article) -> String {
         &article.date,
         &article.body_text,
     )
+}
+
+pub(super) fn build_generated_topic(article: &Article) -> String {
+    build_generated_topic_from_fields(
+        &article.title,
+        &article.subtitle,
+        &article.section,
+        &article.url,
+    )
+}
+
+pub(super) fn build_generated_topic_from_fields(
+    title: &str,
+    subtitle: &str,
+    section: &str,
+    url: &str,
+) -> String {
+    crate::topics::generated_topic_from_fields(title, subtitle, section, url)
 }
 
 pub fn debug_article_fingerprint(article: &Article) -> String {

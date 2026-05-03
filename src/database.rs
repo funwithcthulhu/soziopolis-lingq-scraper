@@ -1,6 +1,6 @@
 use crate::{
     app_paths,
-    domain::{ArticleListItem, ArticleListPage, LibrarySortMode},
+    domain::{ArticleListItem, ArticleListPage, LibraryPageRequest, LibraryQuery, LibrarySortMode},
     jobs::{CompletedJob, QueueSnapshot},
     soziopolis::{Article, build_clean_text},
 };
@@ -13,11 +13,15 @@ use std::{
     time::Duration,
 };
 
-const CURRENT_SCHEMA_VERSION: i32 = 8;
+const CURRENT_SCHEMA_VERSION: i32 = 9;
 static SHARED_DEFAULT_DATABASE: OnceLock<SharedDatabase> = OnceLock::new();
 
-fn library_order_clause(sort_mode: LibrarySortMode) -> &'static str {
-    match sort_mode {
+fn effective_topic_sql() -> &'static str {
+    "COALESCE(NULLIF(custom_topic, ''), generated_topic)"
+}
+
+fn library_order_clause(sort_mode: LibrarySortMode, group_by_topic: bool) -> String {
+    let base_order = match sort_mode {
         LibrarySortMode::Newest => {
             "COALESCE(NULLIF(published_at, ''), fetched_at) DESC, fetched_at DESC, id DESC"
         }
@@ -27,36 +31,41 @@ fn library_order_clause(sort_mode: LibrarySortMode) -> &'static str {
         LibrarySortMode::Longest => "word_count DESC, id DESC",
         LibrarySortMode::Shortest => "word_count ASC, id ASC",
         LibrarySortMode::Title => "LOWER(title) ASC, id ASC",
+    };
+    if group_by_topic {
+        format!("LOWER({}) ASC, {base_order}", effective_topic_sql())
+    } else {
+        base_order.to_owned()
     }
 }
 
-fn build_article_card_where_clause(
-    search: Option<&str>,
-    section: Option<&str>,
-    only_not_uploaded: bool,
-    min_words: Option<usize>,
-    max_words: Option<usize>,
-) -> (String, Vec<Value>) {
-    let mut clauses = Vec::new();
+fn build_article_card_where_clause(query: &LibraryQuery) -> (String, Vec<Value>) {
+    let query = query.normalized();
+    let mut clauses: Vec<String> = Vec::new();
     let mut values = Vec::new();
 
-    if let Some(fts_query) = build_fts_query(search) {
-        clauses.push("id IN (SELECT rowid FROM articles_fts WHERE articles_fts MATCH ?)");
+    if let Some(fts_query) = build_fts_query(query.search.as_deref()) {
+        clauses
+            .push("id IN (SELECT rowid FROM articles_fts WHERE articles_fts MATCH ?)".to_owned());
         values.push(Value::Text(fts_query));
     }
-    if let Some(section) = section.filter(|value| !value.trim().is_empty()) {
-        clauses.push("section = ?");
-        values.push(Value::Text(section.to_owned()));
+    if let Some(section) = query.section {
+        clauses.push("section = ?".to_owned());
+        values.push(Value::Text(section));
     }
-    if only_not_uploaded {
-        clauses.push("uploaded_to_lingq = 0");
+    if let Some(topic) = query.topic {
+        clauses.push(format!("{} = ?", effective_topic_sql()));
+        values.push(Value::Text(topic));
     }
-    if let Some(min_words) = min_words {
-        clauses.push("word_count >= ?");
+    if query.only_not_uploaded {
+        clauses.push("uploaded_to_lingq = 0".to_owned());
+    }
+    if let Some(min_words) = query.min_words {
+        clauses.push("word_count >= ?".to_owned());
         values.push(Value::Integer(min_words as i64));
     }
-    if let Some(max_words) = max_words {
-        clauses.push("word_count <= ?");
+    if let Some(max_words) = query.max_words {
+        clauses.push("word_count <= ?".to_owned());
         values.push(Value::Integer(max_words as i64));
     }
 
@@ -79,8 +88,8 @@ mod types;
 pub use types::{LibraryStats, SectionCount, StoredArticle, debug_article_fingerprint};
 use types::{
     build_article_fingerprint, build_article_preview_summary, build_fts_query,
-    build_preview_summary_from_fields, build_text_fingerprint, map_article_card_row,
-    map_article_row,
+    build_generated_topic, build_generated_topic_from_fields, build_preview_summary_from_fields,
+    build_text_fingerprint, map_article_card_row, map_article_row,
 };
 
 pub struct Database {
@@ -155,18 +164,26 @@ impl Database {
                 ));
             }
         }
+        if let Ok(backfilled) = database.backfill_generated_topics_once() {
+            if backfilled > 0 {
+                crate::logging::info(format!(
+                    "backfilled generated topics for {backfilled} existing article(s)"
+                ));
+            }
+        }
         Ok(database)
     }
 
     pub fn save_article(&self, article: &Article) -> Result<i64> {
         let preview_summary = build_article_preview_summary(article);
+        let generated_topic = build_generated_topic(article);
         let mut save_stmt = self.conn.prepare_cached(
             r#"
             INSERT INTO articles (
-                url, title, subtitle, teaser, preview_summary, author, date, published_at, section, source_kind,
+                url, title, subtitle, teaser, preview_summary, author, date, published_at, section, generated_topic, source_kind,
                 source_label, content_fingerprint, body_text, clean_text, word_count, fetched_at
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
             ON CONFLICT(url) DO UPDATE SET
                 title = excluded.title,
                 subtitle = excluded.subtitle,
@@ -176,6 +193,7 @@ impl Database {
                 date = excluded.date,
                 published_at = excluded.published_at,
                 section = excluded.section,
+                generated_topic = excluded.generated_topic,
                 source_kind = excluded.source_kind,
                 source_label = excluded.source_label,
                 content_fingerprint = excluded.content_fingerprint,
@@ -195,6 +213,7 @@ impl Database {
             article.date,
             article.published_at,
             article.section,
+            generated_topic,
             article.source_kind,
             article.source_label,
             build_article_fingerprint(article),
@@ -222,10 +241,10 @@ impl Database {
             let mut save_stmt = transaction.prepare(
                 r#"
                 INSERT INTO articles (
-                    url, title, subtitle, teaser, preview_summary, author, date, published_at, section, source_kind,
+                    url, title, subtitle, teaser, preview_summary, author, date, published_at, section, generated_topic, source_kind,
                     source_label, content_fingerprint, body_text, clean_text, word_count, fetched_at
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
                 ON CONFLICT(url) DO UPDATE SET
                     title = excluded.title,
                     subtitle = excluded.subtitle,
@@ -235,6 +254,7 @@ impl Database {
                     date = excluded.date,
                     published_at = excluded.published_at,
                     section = excluded.section,
+                    generated_topic = excluded.generated_topic,
                     source_kind = excluded.source_kind,
                     source_label = excluded.source_label,
                     content_fingerprint = excluded.content_fingerprint,
@@ -256,6 +276,7 @@ impl Database {
                     article.date,
                     article.published_at,
                     article.section,
+                    build_generated_topic(article),
                     article.source_kind,
                     article.source_label,
                     build_article_fingerprint(article),
@@ -275,17 +296,12 @@ impl Database {
         self.get_articles_by_urls(&urls)
     }
 
-    pub fn list_articles(
-        &self,
-        search: Option<&str>,
-        section: Option<&str>,
-        only_not_uploaded: bool,
-        limit: usize,
-    ) -> Result<Vec<StoredArticle>> {
+    pub fn list_articles(&self, query: &LibraryQuery, limit: usize) -> Result<Vec<StoredArticle>> {
+        let query = query.normalized();
         let sql = if limit == 0 {
             r#"
                 SELECT
-                    id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section, source_kind,
+                    id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section, generated_topic, source_kind,
                     source_label, content_fingerprint, body_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
                     lingq_lesson_id, lingq_lesson_url
                 FROM articles
@@ -293,13 +309,14 @@ impl Database {
                     SELECT rowid FROM articles_fts WHERE articles_fts MATCH ?1
                 ))
                   AND (?2 IS NULL OR section = ?2)
-                  AND (?3 = 0 OR uploaded_to_lingq = 0)
+                  AND (?3 IS NULL OR COALESCE(NULLIF(custom_topic, ''), generated_topic) = ?3)
+                  AND (?4 = 0 OR uploaded_to_lingq = 0)
                 ORDER BY COALESCE(NULLIF(published_at, ''), fetched_at) DESC, fetched_at DESC
             "#
         } else {
             r#"
                 SELECT
-                    id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section, source_kind,
+                    id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section, generated_topic, source_kind,
                     source_label, content_fingerprint, body_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
                     lingq_lesson_id, lingq_lesson_url
                 FROM articles
@@ -307,25 +324,32 @@ impl Database {
                     SELECT rowid FROM articles_fts WHERE articles_fts MATCH ?1
                 ))
                   AND (?2 IS NULL OR section = ?2)
-                  AND (?3 = 0 OR uploaded_to_lingq = 0)
+                  AND (?3 IS NULL OR COALESCE(NULLIF(custom_topic, ''), generated_topic) = ?3)
+                  AND (?4 = 0 OR uploaded_to_lingq = 0)
                 ORDER BY COALESCE(NULLIF(published_at, ''), fetched_at) DESC, fetched_at DESC
-                LIMIT ?4
+                LIMIT ?5
             "#
         };
 
-        let fts_query = build_fts_query(search);
+        let fts_query = build_fts_query(query.search.as_deref());
         let mut stmt = self.conn.prepare(sql)?;
         let rows = if limit == 0 {
             stmt.query_map(
-                params![fts_query, section, if only_not_uploaded { 1 } else { 0 }],
+                params![
+                    fts_query,
+                    query.section,
+                    query.topic,
+                    if query.only_not_uploaded { 1 } else { 0 }
+                ],
                 map_article_row,
             )?
         } else {
             stmt.query_map(
                 params![
                     fts_query,
-                    section,
-                    if only_not_uploaded { 1 } else { 0 },
+                    query.section,
+                    query.topic,
+                    if query.only_not_uploaded { 1 } else { 0 },
                     limit as i64
                 ],
                 map_article_row,
@@ -336,54 +360,27 @@ impl Database {
             .map_err(Into::into)
     }
 
-    pub fn list_article_cards(
-        &self,
-        search: Option<&str>,
-        section: Option<&str>,
-        only_not_uploaded: bool,
-    ) -> Result<Vec<ArticleListItem>> {
-        let fts_query = build_fts_query(search);
-        let mut stmt = self.conn.prepare(
-            r#"
-                SELECT
-                    id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section,
-                    word_count, fetched_at, custom_topic, uploaded_to_lingq, lingq_lesson_id, lingq_lesson_url
-                FROM articles
-                WHERE (?1 IS NULL OR id IN (
-                    SELECT rowid FROM articles_fts WHERE articles_fts MATCH ?1
-                ))
-                  AND (?2 IS NULL OR section = ?2)
-                  AND (?3 = 0 OR uploaded_to_lingq = 0)
-                ORDER BY COALESCE(NULLIF(published_at, ''), fetched_at) DESC, fetched_at DESC
-            "#,
-        )?;
-        let rows = stmt.query_map(
-            params![fts_query, section, if only_not_uploaded { 1 } else { 0 }],
-            map_article_card_row,
-        )?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(Into::into)
+    pub fn list_article_cards(&self, query: &LibraryQuery) -> Result<Vec<ArticleListItem>> {
+        self.list_article_cards_page(
+            query,
+            LibraryPageRequest {
+                sort_mode: LibrarySortMode::Newest,
+                group_by_topic: false,
+                offset: 0,
+                limit: usize::MAX / 4,
+            },
+        )
+        .map(|page| page.items)
     }
 
     pub fn list_article_cards_page(
         &self,
-        search: Option<&str>,
-        section: Option<&str>,
-        only_not_uploaded: bool,
-        min_words: Option<usize>,
-        max_words: Option<usize>,
-        sort_mode: LibrarySortMode,
-        offset: usize,
-        limit: usize,
+        query: &LibraryQuery,
+        request: LibraryPageRequest,
     ) -> Result<ArticleListPage> {
-        let page_limit = limit.max(1);
-        let (where_clause, values) = build_article_card_where_clause(
-            search,
-            section,
-            only_not_uploaded,
-            min_words,
-            max_words,
-        );
+        let request = request.normalized();
+        let page_limit = request.limit;
+        let (where_clause, values) = build_article_card_where_clause(query);
 
         let count_sql = format!("SELECT COUNT(*) FROM articles {where_clause}");
         let total_count =
@@ -396,17 +393,17 @@ impl Database {
             r#"
                 SELECT
                     id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section,
-                    word_count, fetched_at, custom_topic, uploaded_to_lingq, lingq_lesson_id, lingq_lesson_url
+                    generated_topic, word_count, fetched_at, custom_topic, uploaded_to_lingq, lingq_lesson_id, lingq_lesson_url
                 FROM articles
                 {where_clause}
                 ORDER BY {}
                 LIMIT ? OFFSET ?
             "#,
-            library_order_clause(sort_mode)
+            library_order_clause(request.sort_mode, request.group_by_topic)
         );
         let mut page_values = values.clone();
         page_values.push(Value::Integer(page_limit as i64));
-        page_values.push(Value::Integer(offset as i64));
+        page_values.push(Value::Integer(request.offset as i64));
 
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params_from_iter(page_values.iter()), map_article_card_row)?;
@@ -415,26 +412,13 @@ impl Database {
         Ok(ArticleListPage {
             items,
             total_count,
-            offset,
+            offset: request.offset,
             limit: page_limit,
         })
     }
 
-    pub fn list_matching_article_card_ids(
-        &self,
-        search: Option<&str>,
-        section: Option<&str>,
-        only_not_uploaded: bool,
-        min_words: Option<usize>,
-        max_words: Option<usize>,
-    ) -> Result<Vec<i64>> {
-        let (where_clause, values) = build_article_card_where_clause(
-            search,
-            section,
-            only_not_uploaded,
-            min_words,
-            max_words,
-        );
+    pub fn list_matching_article_card_ids(&self, query: &LibraryQuery) -> Result<Vec<i64>> {
+        let (where_clause, values) = build_article_card_where_clause(query);
         let sql = format!("SELECT id FROM articles {where_clause}");
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params_from_iter(values.iter()), |row| row.get::<_, i64>(0))?;
@@ -446,7 +430,7 @@ impl Database {
         let mut stmt = self.conn.prepare_cached(
             r#"
                 SELECT
-                    id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section, source_kind,
+                    id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section, generated_topic, source_kind,
                     source_label, content_fingerprint, body_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
                     lingq_lesson_id, lingq_lesson_url
                 FROM articles
@@ -469,7 +453,7 @@ impl Database {
         let sql = format!(
             r#"
             SELECT
-                id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section, source_kind,
+                id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section, generated_topic, source_kind,
                 source_label, content_fingerprint, body_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
                 lingq_lesson_id, lingq_lesson_url
             FROM articles
@@ -494,7 +478,7 @@ impl Database {
         let sql = format!(
             r#"
             SELECT
-                id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section, source_kind,
+                id, url, title, subtitle, teaser, preview_summary, author, date, published_at, section, generated_topic, source_kind,
                 source_label, content_fingerprint, body_text, word_count, fetched_at, custom_topic, uploaded_to_lingq,
                 lingq_lesson_id, lingq_lesson_url
             FROM articles
@@ -736,7 +720,7 @@ impl Database {
 mod tests {
     use super::{CURRENT_SCHEMA_VERSION, Database};
     use crate::{
-        domain::LibrarySortMode,
+        domain::{LibraryPageRequest, LibraryQuery, LibrarySortMode},
         jobs::{
             CompletedJob, FailedFetchItem, JobKind, QueueSnapshot, QueuedJob, QueuedJobRequest,
             UploadFailure,
@@ -824,10 +808,17 @@ mod tests {
             .expect("article should save");
 
         let rows = database
-            .list_articles(Some("platform sociology"), None, false, 0)
+            .list_articles(
+                &LibraryQuery {
+                    search: Some("platform sociology".to_owned()),
+                    ..LibraryQuery::default()
+                },
+                0,
+            )
             .expect("fts search should work");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].title, "Digital Futures");
+        assert_eq!(rows[0].generated_topic, "Digitalisierung & KI");
 
         drop(database);
         let _ = fs::remove_file(db_path);
@@ -871,7 +862,15 @@ mod tests {
         }
 
         let page = database
-            .list_article_cards_page(None, None, false, None, None, LibrarySortMode::Newest, 2, 2)
+            .list_article_cards_page(
+                &LibraryQuery::default(),
+                LibraryPageRequest {
+                    sort_mode: LibrarySortMode::Newest,
+                    group_by_topic: false,
+                    offset: 2,
+                    limit: 2,
+                },
+            )
             .expect("paged card query should succeed");
 
         assert_eq!(page.total_count, 5);
@@ -880,6 +879,74 @@ mod tests {
         assert_eq!(page.items.len(), 2);
         assert_eq!(page.items[0].title, "Title 2");
         assert_eq!(page.items[1].title, "Title 1");
+
+        drop(database);
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn list_article_cards_page_filters_by_effective_topic() {
+        let db_path = temp_db_path();
+        let database = Database::open(&db_path).expect("database should open");
+
+        let digital = sample_article(
+            "https://example.com/digital-topic",
+            "Digitale Plattformen",
+            "Technik",
+            1100,
+        );
+        let labor = sample_article(
+            "https://example.com/labor-topic",
+            "Arbeitswelten",
+            "Wirtschaft",
+            980,
+        );
+
+        let digital_id = database
+            .save_article(&digital)
+            .expect("digital article should save");
+        database
+            .save_article(&labor)
+            .expect("labor article should save");
+        database
+            .set_custom_topic(digital_id, Some("Custom Topic"))
+            .expect("custom topic should save");
+
+        let generated_query = LibraryQuery {
+            topic: Some("Wirtschaft & Arbeit".to_owned()),
+            ..LibraryQuery::default()
+        };
+        let generated_page = database
+            .list_article_cards_page(
+                &generated_query,
+                LibraryPageRequest {
+                    sort_mode: LibrarySortMode::Newest,
+                    group_by_topic: false,
+                    offset: 0,
+                    limit: 10,
+                },
+            )
+            .expect("generated topic filter should work");
+        assert_eq!(generated_page.items.len(), 1);
+        assert_eq!(generated_page.items[0].title, "Arbeitswelten");
+
+        let custom_query = LibraryQuery {
+            topic: Some("Custom Topic".to_owned()),
+            ..LibraryQuery::default()
+        };
+        let custom_page = database
+            .list_article_cards_page(
+                &custom_query,
+                LibraryPageRequest {
+                    sort_mode: LibrarySortMode::Newest,
+                    group_by_topic: false,
+                    offset: 0,
+                    limit: 10,
+                },
+            )
+            .expect("custom topic filter should work");
+        assert_eq!(custom_page.items.len(), 1);
+        assert_eq!(custom_page.items[0].id, digital_id);
 
         drop(database);
         let _ = fs::remove_file(db_path);
@@ -992,7 +1059,13 @@ mod tests {
 
         let database = Database::open(&db_path).expect("migration should upgrade legacy schema");
         let rows = database
-            .list_articles(Some("legacy"), None, false, 0)
+            .list_articles(
+                &LibraryQuery {
+                    search: Some("legacy".to_owned()),
+                    ..LibraryQuery::default()
+                },
+                0,
+            )
             .expect("fts query should work after migration");
 
         assert_eq!(rows.len(), 1);
@@ -1022,7 +1095,13 @@ mod tests {
                 .has_column("articles", "preview_summary")
                 .expect("preview_summary column check should succeed")
         );
+        assert!(
+            database
+                .has_column("articles", "generated_topic")
+                .expect("generated_topic column check should succeed")
+        );
         assert!(!rows[0].preview_summary.trim().is_empty());
+        assert!(!rows[0].generated_topic.trim().is_empty());
 
         drop(database);
         let _ = fs::remove_file(db_path);

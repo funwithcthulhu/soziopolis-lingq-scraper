@@ -654,42 +654,34 @@ impl App {
 
     /// Read-only view of filtered library articles using current state.
     fn get_display_library_articles(&self) -> Vec<ArticleListItem> {
-        let trimmed_search = self.library_search.trim();
+        if let Some(page) = &self.library_page_cache {
+            return page.items.clone();
+        }
+
+        let trimmed_search = self.library_search.trim().to_lowercase();
         let min_words =
             parse_optional_positive_usize(&self.library_word_count_min, "Min").unwrap_or(None);
         let max_words =
             parse_optional_positive_usize(&self.library_word_count_max, "Max").unwrap_or(None);
 
-        // If we have a page cache and it's current, use it
-        if let Some(page) = &self.library_page_cache {
-            return page.items.clone();
-        }
-        // If we have a filtered cache and it's current, use it
-        if !self.library_filtered_cache_results.is_empty()
-            && self.library_filtered_cache_revision == self.library_data_revision
-        {
-            return self.library_filtered_cache_results.clone();
-        }
-
-        // Otherwise compute from scratch (read-only path)
-        let mut articles = if trimmed_search.is_empty() {
-            self.library_articles.clone()
-        } else if self.library_search_cache_query == trimmed_search {
-            self.library_search_cache_results.clone()
-        } else {
-            // Can't do DB search from immutable view, fall back to in-memory
-            self.library_articles
+        let mut articles = self.library_articles.clone();
+        if !trimmed_search.is_empty() {
+            articles.retain(|article| {
+                [
+                    article.title.as_str(),
+                    article.subtitle.as_str(),
+                    article.teaser.as_str(),
+                    article.preview_summary.as_str(),
+                    article.author.as_str(),
+                    article.section.as_str(),
+                    article.url.as_str(),
+                    article.generated_topic.as_str(),
+                    article.custom_topic.as_str(),
+                ]
                 .iter()
-                .filter(|a| {
-                    let s = trimmed_search.to_lowercase();
-                    a.title.to_lowercase().contains(&s)
-                        || a.subtitle.to_lowercase().contains(&s)
-                        || a.teaser.to_lowercase().contains(&s)
-                        || a.url.to_lowercase().contains(&s)
-                })
-                .cloned()
-                .collect()
-        };
+                .any(|field| field.to_lowercase().contains(&trimmed_search))
+            });
+        }
 
         articles.retain(|article| {
             (self.library_topic.trim().is_empty()
@@ -1058,6 +1050,16 @@ impl App {
             .unwrap_or("not found");
 
         let perf = crate::perf::snapshot();
+        let average_library_page_ms = if perf.library_page_queries == 0 {
+            0
+        } else {
+            perf.library_page_query_time_ms_total / perf.library_page_queries
+        };
+        let average_content_refresh_ms = if perf.content_refreshes == 0 {
+            0
+        } else {
+            perf.content_refresh_time_ms_total / perf.content_refreshes
+        };
 
         let info_row = row![
             text(format!("Version {}", env!("CARGO_PKG_VERSION"))).size(13),
@@ -1067,6 +1069,8 @@ impl App {
                 perf.browse_cache_hits, perf.browse_cache_misses
             ))
             .size(13),
+            text(format!("Library page avg: {} ms", average_library_page_ms)).size(13),
+            text(format!("Refresh avg: {} ms", average_content_refresh_ms)).size(13),
         ]
         .spacing(16);
 

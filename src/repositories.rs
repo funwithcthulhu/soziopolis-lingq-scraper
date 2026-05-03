@@ -1,6 +1,6 @@
 use crate::{
     database::{Database, LibraryStats, StoredArticle},
-    domain::{ArticleListItem, ArticleListPage, LibrarySortMode},
+    domain::{ArticleListItem, ArticleListPage, LibraryPageRequest, LibraryQuery},
     jobs::{CompletedJob, QueueSnapshot},
     soziopolis::Article,
 };
@@ -20,65 +20,24 @@ impl<'a> ArticleRepository<'a> {
         self.db.save_article(article)
     }
 
-    pub fn list_articles(
-        &self,
-        search: Option<&str>,
-        section: Option<&str>,
-        only_not_uploaded: bool,
-        limit: usize,
-    ) -> Result<Vec<StoredArticle>> {
-        self.db
-            .list_articles(search, section, only_not_uploaded, limit)
+    pub fn list_articles(&self, query: &LibraryQuery, limit: usize) -> Result<Vec<StoredArticle>> {
+        self.db.list_articles(query, limit)
     }
 
-    pub fn list_article_cards(
-        &self,
-        search: Option<&str>,
-        section: Option<&str>,
-        only_not_uploaded: bool,
-    ) -> Result<Vec<ArticleListItem>> {
-        self.db
-            .list_article_cards(search, section, only_not_uploaded)
+    pub fn list_article_cards(&self, query: &LibraryQuery) -> Result<Vec<ArticleListItem>> {
+        self.db.list_article_cards(query)
     }
 
     pub fn list_article_cards_page(
         &self,
-        search: Option<&str>,
-        section: Option<&str>,
-        only_not_uploaded: bool,
-        min_words: Option<usize>,
-        max_words: Option<usize>,
-        sort_mode: LibrarySortMode,
-        offset: usize,
-        limit: usize,
+        query: &LibraryQuery,
+        request: LibraryPageRequest,
     ) -> Result<ArticleListPage> {
-        self.db.list_article_cards_page(
-            search,
-            section,
-            only_not_uploaded,
-            min_words,
-            max_words,
-            sort_mode,
-            offset,
-            limit,
-        )
+        self.db.list_article_cards_page(query, request)
     }
 
-    pub fn list_matching_article_card_ids(
-        &self,
-        search: Option<&str>,
-        section: Option<&str>,
-        only_not_uploaded: bool,
-        min_words: Option<usize>,
-        max_words: Option<usize>,
-    ) -> Result<Vec<i64>> {
-        self.db.list_matching_article_card_ids(
-            search,
-            section,
-            only_not_uploaded,
-            min_words,
-            max_words,
-        )
+    pub fn list_matching_article_card_ids(&self, query: &LibraryQuery) -> Result<Vec<i64>> {
+        self.db.list_matching_article_card_ids(query)
     }
 
     pub fn get_article(&self, id: i64) -> Result<Option<StoredArticle>> {

@@ -207,32 +207,38 @@ impl App {
             // ── Library ─────────────────────────────────────────
             Message::LibrarySearchChanged(s) => {
                 self.library_search = s;
-                self.invalidate_library_view_cache();
+                self.library_page_index = 0;
+                self.refresh_library_page_cache_lenient();
                 Task::none()
             }
             Message::LibraryTopicChanged(t) => {
                 self.library_topic = t;
-                self.invalidate_library_view_cache();
+                self.library_page_index = 0;
+                self.refresh_library_page_cache_lenient();
                 Task::none()
             }
             Message::LibraryToggleNotUploaded(v) => {
                 self.library_only_not_uploaded = v;
-                self.invalidate_library_view_cache();
+                self.library_page_index = 0;
+                self.refresh_library_page_cache_lenient();
                 Task::none()
             }
             Message::LibraryMinWordsChanged(s) => {
                 self.library_word_count_min = s;
-                self.invalidate_library_view_cache();
+                self.library_page_index = 0;
+                self.refresh_library_page_cache_lenient();
                 Task::none()
             }
             Message::LibraryMaxWordsChanged(s) => {
                 self.library_word_count_max = s;
-                self.invalidate_library_view_cache();
+                self.library_page_index = 0;
+                self.refresh_library_page_cache_lenient();
                 Task::none()
             }
             Message::LibrarySortChanged(mode) => {
                 self.library_sort_mode = mode;
-                self.invalidate_library_view_cache();
+                self.library_page_index = 0;
+                self.refresh_library_page_cache_lenient();
                 Task::none()
             }
             Message::LibraryToggleDense(v) => {
@@ -241,7 +247,8 @@ impl App {
             }
             Message::LibraryToggleGroupByTopic(v) => {
                 self.library_group_by_topic = v;
-                self.invalidate_library_view_cache();
+                self.library_page_index = 0;
+                self.refresh_library_page_cache_lenient();
                 Task::none()
             }
             Message::LibraryToggleFilters => {
@@ -287,14 +294,12 @@ impl App {
             }
             Message::LibraryNextPage => {
                 self.library_page_index += 1;
-                self.library_page_cache_key.clear();
-                self.library_page_cache = None;
+                self.refresh_library_page_cache_lenient();
                 Task::none()
             }
             Message::LibraryPrevPage => {
                 self.library_page_index = self.library_page_index.saturating_sub(1);
-                self.library_page_cache_key.clear();
-                self.library_page_cache = None;
+                self.refresh_library_page_cache_lenient();
                 Task::none()
             }
 
@@ -616,8 +621,8 @@ impl App {
                 match result.library_articles {
                     Ok(articles) => {
                         self.library_articles = articles;
-                        self.invalidate_library_search_cache();
-                        self.invalidate_library_view_cache();
+                        self.library_page_index = 0;
+                        self.refresh_library_page_cache_lenient();
                     }
                     Err(err) => failures.push(err),
                 }
@@ -904,20 +909,6 @@ impl App {
         }
     }
 
-    pub(super) fn invalidate_library_search_cache(&mut self) {
-        self.library_search_cache_query.clear();
-        self.library_search_cache_results.clear();
-    }
-
-    pub(super) fn invalidate_library_view_cache(&mut self) {
-        self.library_data_revision = self.library_data_revision.wrapping_add(1);
-        self.library_filtered_cache_revision = u64::MAX;
-        self.library_filtered_cache_key.clear();
-        self.library_filtered_cache_results.clear();
-        self.library_page_cache_key.clear();
-        self.library_page_cache = None;
-    }
-
     fn apply_imported_articles(&mut self, mut saved_articles: Vec<ArticleListItem>) {
         for article in &saved_articles {
             self.browse_imported_urls.insert(article.url.clone());
@@ -925,9 +916,8 @@ impl App {
         self.library_articles
             .retain(|existing| !saved_articles.iter().any(|s| s.id == existing.id));
         self.library_articles.append(&mut saved_articles);
-        self.invalidate_library_search_cache();
-        self.invalidate_library_view_cache();
         self.library_stats = Some(compute_local_library_stats(&self.library_articles));
+        self.refresh_library_page_cache_lenient();
     }
 
     fn apply_uploaded_articles(&mut self, successes: &[UploadSuccess]) {
@@ -942,9 +932,8 @@ impl App {
                 article.lingq_lesson_url = success.lesson_url.clone();
             }
         }
-        self.invalidate_library_search_cache();
-        self.invalidate_library_view_cache();
         self.library_stats = Some(compute_local_library_stats(&self.library_articles));
+        self.refresh_library_page_cache_lenient();
     }
 
     fn remove_article_from_local_state(&mut self, article_id: i64) {
@@ -960,70 +949,92 @@ impl App {
         }
         self.lingq_selected_articles.remove(&article_id);
         self.article_detail = self.article_detail.take().filter(|a| a.id != article_id);
-        self.invalidate_library_search_cache();
-        self.invalidate_library_view_cache();
         self.library_stats = Some(compute_local_library_stats(&self.library_articles));
+        self.refresh_library_page_cache_lenient();
     }
 
     fn select_all_visible_articles(&mut self) {
-        if let Ok(filtered) = self.get_filtered_library_articles() {
-            self.lingq_selected_articles = filtered.iter().map(|a| a.id).collect();
-        }
+        let visible_ids = self
+            .library_page_cache
+            .as_ref()
+            .map(|page| page.items.iter().map(|article| article.id).collect())
+            .unwrap_or_else(|| {
+                self.library_articles
+                    .iter()
+                    .map(|article| article.id)
+                    .collect()
+            });
+        self.lingq_selected_articles = visible_ids;
     }
 
     fn select_all_matching_not_uploaded(&mut self) -> Result<(), String> {
-        let filtered = self.get_filtered_library_articles()?;
-        self.lingq_selected_articles = filtered
-            .iter()
-            .filter(|a| !a.uploaded_to_lingq)
-            .map(|a| a.id)
+        let mut query = self.current_library_query()?;
+        query.only_not_uploaded = true;
+        let ctx = self.app_context()?;
+        self.lingq_selected_articles = app_ops::list_matching_library_ids(&ctx, &query)
+            .map_err(|err| err.to_string())?
+            .into_iter()
             .collect();
         Ok(())
     }
 
-    pub(super) fn get_filtered_library_articles(&mut self) -> Result<Vec<ArticleListItem>, String> {
-        let min_words = parse_optional_positive_usize(&self.library_word_count_min, "Min words")?;
-        let max_words = parse_optional_positive_usize(&self.library_word_count_max, "Max words")?;
+    pub(super) fn current_library_query(&self) -> Result<LibraryQuery, String> {
+        Ok(LibraryQuery {
+            search: non_empty_owned(&self.library_search),
+            section: None,
+            topic: non_empty_owned(&self.library_topic),
+            only_not_uploaded: self.library_only_not_uploaded,
+            min_words: parse_optional_positive_usize(&self.library_word_count_min, "Min words")?,
+            max_words: parse_optional_positive_usize(&self.library_word_count_max, "Max words")?,
+        })
+    }
 
-        let trimmed_search = self.library_search.trim();
-        let mut articles = if trimmed_search.is_empty() {
-            self.library_articles.clone()
-        } else {
-            if self.library_search_cache_query != trimmed_search {
-                if let Ok(ctx) = self.app_context() {
-                    self.library_search_cache_results = ctx
-                        .db
-                        .with_db(|db| {
-                            let repository = ArticleRepository::new(db);
-                            repository.list_article_cards(Some(trimmed_search), None, false)
-                        })
-                        .map_err(|err| err.to_string())?;
-                    self.library_search_cache_query = trimmed_search.to_owned();
-                }
-            }
-            self.library_search_cache_results.clone()
-        };
+    fn current_library_query_lenient(&self) -> LibraryQuery {
+        LibraryQuery {
+            search: non_empty_owned(&self.library_search),
+            section: None,
+            topic: non_empty_owned(&self.library_topic),
+            only_not_uploaded: self.library_only_not_uploaded,
+            min_words: parse_optional_positive_usize(&self.library_word_count_min, "Min words")
+                .unwrap_or(None),
+            max_words: parse_optional_positive_usize(&self.library_word_count_max, "Max words")
+                .unwrap_or(None),
+        }
+    }
 
-        articles.retain(|article| {
-            (self.library_topic.trim().is_empty()
-                || effective_topic_for_article(article) == self.library_topic)
-                && (!self.library_only_not_uploaded || !article.uploaded_to_lingq)
-                && min_words.is_none_or(|min| article.word_count as usize >= min)
-                && max_words.is_none_or(|max| article.word_count as usize <= max)
-        });
+    fn current_library_page_request(&self) -> LibraryPageRequest {
+        LibraryPageRequest {
+            sort_mode: self.library_sort_mode,
+            group_by_topic: self.library_group_by_topic,
+            offset: self.library_page_index.saturating_mul(LIBRARY_PAGE_SIZE),
+            limit: LIBRARY_PAGE_SIZE,
+        }
+    }
 
-        articles.sort_by(|a, b| {
-            let primary = if self.library_group_by_topic {
-                effective_topic_for_article(a)
-                    .cmp(&effective_topic_for_article(b))
-                    .then_with(|| compare_library_articles(a, b, self.library_sort_mode))
-            } else {
-                compare_library_articles(a, b, self.library_sort_mode)
-            };
-            primary.then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
-        });
+    fn refresh_library_page_cache_lenient(&mut self) {
+        if let Err(err) = self.refresh_library_page_cache() {
+            logging::warn(format!("could not refresh library page cache: {err}"));
+        }
+    }
 
-        Ok(articles)
+    fn refresh_library_page_cache(&mut self) -> Result<(), String> {
+        let started = Instant::now();
+        let ctx = self.app_context()?;
+        let query = self.current_library_query_lenient();
+        let mut request = self.current_library_page_request();
+        let mut page =
+            app_ops::list_library_page(&ctx, &query, request).map_err(|err| err.to_string())?;
+
+        if page.total_count > 0 && page.items.is_empty() && self.library_page_index > 0 {
+            self.library_page_index = page.total_count.saturating_sub(1) / request.limit.max(1);
+            request = self.current_library_page_request();
+            page =
+                app_ops::list_library_page(&ctx, &query, request).map_err(|err| err.to_string())?;
+        }
+
+        self.library_page_cache = Some(page);
+        crate::perf::record_library_page_query(started.elapsed());
+        Ok(())
     }
 
     #[allow(dead_code)]
@@ -1057,19 +1068,6 @@ impl App {
             NoticeKind::Info,
         );
     }
-}
-
-pub(super) fn article_matches_search(article: &ArticleSummary, search: &str) -> bool {
-    [
-        article.title.as_str(),
-        article.teaser.as_str(),
-        article.author.as_str(),
-        article.date.as_str(),
-        article.section.as_str(),
-        article.url.as_str(),
-    ]
-    .iter()
-    .any(|field| field.to_lowercase().contains(search))
 }
 
 fn create_support_bundle(app: &App) -> Result<PathBuf, String> {

@@ -1,6 +1,9 @@
 use crate::{
-    context::AppContext, domain::ArticleListItem, repositories::ArticleRepository,
-    services::ContentRefreshResult, soziopolis,
+    context::AppContext,
+    domain::{ArticleListItem, ArticleListPage, LibraryPageRequest, LibraryQuery},
+    repositories::ArticleRepository,
+    services::ContentRefreshResult,
+    soziopolis,
 };
 use anyhow::Result;
 
@@ -10,13 +13,29 @@ pub fn refresh_content(ctx: &AppContext) -> Result<ContentRefreshResult> {
 
 pub fn search_library_cards(
     ctx: &AppContext,
-    search: Option<&str>,
-    section: Option<&str>,
-    only_not_uploaded: bool,
+    query: &LibraryQuery,
 ) -> Result<Vec<ArticleListItem>> {
     ctx.db.with_db(|db| {
         let repository = ArticleRepository::new(db);
-        repository.list_article_cards(search, section, only_not_uploaded)
+        repository.list_article_cards(query)
+    })
+}
+
+pub fn list_library_page(
+    ctx: &AppContext,
+    query: &LibraryQuery,
+    request: LibraryPageRequest,
+) -> Result<ArticleListPage> {
+    ctx.db.with_db(|db| {
+        let repository = ArticleRepository::new(db);
+        repository.list_article_cards_page(query, request)
+    })
+}
+
+pub fn list_matching_library_ids(ctx: &AppContext, query: &LibraryQuery) -> Result<Vec<i64>> {
+    ctx.db.with_db(|db| {
+        let repository = ArticleRepository::new(db);
+        repository.list_matching_article_card_ids(query)
     })
 }
 

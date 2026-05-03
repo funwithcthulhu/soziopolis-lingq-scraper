@@ -130,4 +130,54 @@ impl Database {
         transaction.commit()?;
         Ok(pending.len())
     }
+
+    pub(super) fn backfill_generated_topics_once(&mut self) -> Result<usize> {
+        if self
+            .get_app_state("generated_topic_backfill_v1")?
+            .is_some_and(|value| value == "1")
+        {
+            return Ok(0);
+        }
+
+        let pending = {
+            let mut stmt = self.conn.prepare(
+                "SELECT id, title, subtitle, section, url FROM articles WHERE TRIM(generated_topic) = ''",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+
+        let transaction = self.conn.transaction()?;
+        {
+            let mut update_stmt =
+                transaction.prepare("UPDATE articles SET generated_topic = ?1 WHERE id = ?2")?;
+            for (id, title, subtitle, section, url) in &pending {
+                let generated_topic =
+                    build_generated_topic_from_fields(title, subtitle, section, url);
+                update_stmt.execute(params![generated_topic, id])?;
+            }
+        }
+        transaction.execute(
+            "INSERT INTO app_state(key, value) VALUES ('generated_topic_backfill_v1', '1')
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [],
+        )?;
+        transaction.commit()?;
+
+        if !pending.is_empty() {
+            self.rebuild_fts_if_needed(true)?;
+        } else {
+            self.set_app_state("generated_topic_backfill_v1", "1")?;
+        }
+
+        Ok(pending.len())
+    }
 }

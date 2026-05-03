@@ -4,7 +4,7 @@ use crate::{
     context::AppContext,
     credential_store,
     database::{LibraryStats, SectionCount, StoredArticle},
-    domain::{ArticleListItem, ArticleListPage, LibrarySortMode},
+    domain::{ArticleListItem, ArticleListPage, LibraryPageRequest, LibraryQuery, LibrarySortMode},
     jobs::{
         CompletedJob, FailedFetchItem, ImportProgress, JobKind, QueueSnapshot, QueuedJob,
         QueuedJobRequest, UploadFailure, UploadProgress, UploadSuccess,
@@ -54,6 +54,8 @@ use helpers::*;
 use message::*;
 use state::*;
 use style::*;
+
+const LIBRARY_PAGE_SIZE: usize = 60;
 
 pub fn run() -> iced::Result {
     iced::application("Soziopolis Reader", App::update, App::view)

@@ -50,8 +50,25 @@ impl SettingsStore {
         let data = if path.exists() {
             let raw = std::fs::read_to_string(&path)
                 .with_context(|| format!("failed to read {}", path.display()))?;
-            serde_json::from_str(&raw)
-                .with_context(|| format!("failed to parse {}", path.display()))?
+            match serde_json::from_str(&raw) {
+                Ok(data) => data,
+                Err(err) => {
+                    let backup_path = invalid_settings_backup_path(&path);
+                    std::fs::rename(&path, &backup_path).with_context(|| {
+                        format!(
+                            "failed to parse {} and could not move invalid settings file to {}",
+                            path.display(),
+                            backup_path.display()
+                        )
+                    })?;
+                    return Err(anyhow::anyhow!(
+                        "failed to parse {}; moved invalid settings file to {}: {}",
+                        path.display(),
+                        backup_path.display(),
+                        err
+                    ));
+                }
+            }
         } else {
             AppSettings::default()
         };
@@ -84,6 +101,25 @@ impl SettingsStore {
     }
 }
 
+fn invalid_settings_backup_path(path: &std::path::Path) -> PathBuf {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let file_stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("settings");
+    let extension = path.extension().and_then(|extension| extension.to_str());
+    let backup_name = match extension {
+        Some(extension) if !extension.is_empty() => {
+            format!("{file_stem}.invalid-{timestamp}.{extension}")
+        }
+        _ => format!("{file_stem}.invalid-{timestamp}.json"),
+    };
+    path.with_file_name(backup_name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{AppSettings, SettingsStore};
@@ -112,8 +148,20 @@ mod tests {
             Err(error) => error,
         };
         assert!(error.to_string().contains("failed to parse"));
+        let renamed_files: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .expect("temp dir should be readable")
+            .filter_map(|entry| entry.ok().map(|value| value.path()))
+            .filter(|candidate| {
+                candidate
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("settings.invalid-"))
+            })
+            .collect();
+        assert_eq!(renamed_files.len(), 1);
+        assert!(!path.exists());
 
-        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(&renamed_files[0]);
         let _ = std::fs::remove_dir(dir);
     }
 

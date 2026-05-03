@@ -41,6 +41,7 @@ pub(super) trait LibraryArticleLike {
     fn section(&self) -> &str;
     fn word_count(&self) -> i64;
     fn fetched_at(&self) -> &str;
+    fn generated_topic(&self) -> &str;
     fn custom_topic(&self) -> &str;
     fn body_text(&self) -> Option<&str>;
 }
@@ -72,6 +73,9 @@ impl LibraryArticleLike for ArticleListItem {
     }
     fn fetched_at(&self) -> &str {
         &self.fetched_at
+    }
+    fn generated_topic(&self) -> &str {
+        &self.generated_topic
     }
     fn custom_topic(&self) -> &str {
         &self.custom_topic
@@ -109,6 +113,9 @@ impl LibraryArticleLike for StoredArticle {
     fn fetched_at(&self) -> &str {
         &self.fetched_at
     }
+    fn generated_topic(&self) -> &str {
+        &self.generated_topic
+    }
     fn custom_topic(&self) -> &str {
         &self.custom_topic
     }
@@ -129,6 +136,9 @@ pub(super) fn auto_topic_for_article(article: &impl LibraryArticleLike) -> Strin
 pub(super) fn effective_topic_for_article(article: &impl LibraryArticleLike) -> String {
     if !article.custom_topic().trim().is_empty() {
         return article.custom_topic().trim().to_owned();
+    }
+    if !article.generated_topic().trim().is_empty() {
+        return article.generated_topic().trim().to_owned();
     }
     auto_topic_for_article(article)
 }
@@ -291,6 +301,15 @@ pub(super) fn parse_optional_positive_usize(
         return Err(format!("{label} must be greater than zero."));
     }
     Ok(Some(parsed))
+}
+
+pub(super) fn non_empty_owned(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
 }
 
 pub(super) fn job_timestamp_now() -> String {

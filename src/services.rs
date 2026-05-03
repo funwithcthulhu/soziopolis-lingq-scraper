@@ -1,7 +1,7 @@
 use crate::{
     context::AppContext,
     database::StoredArticle,
-    domain::ArticleListItem,
+    domain::{ArticleListItem, LibraryQuery},
     jobs::{FailedFetchItem, ImportProgress, UploadFailure, UploadProgress, UploadSuccess},
     lingq::{Collection, LingqClient, UploadRequest},
     repositories::ArticleRepository,
@@ -680,7 +680,7 @@ impl LibraryService {
                         .get_all_article_urls()
                         .map_err(|err| err.to_string()),
                     library_articles: repository
-                        .list_article_cards(None, None, false)
+                        .list_article_cards(&LibraryQuery::default())
                         .map_err(|err| err.to_string()),
                     library_stats: repository.get_stats().map_err(|err| err.to_string()),
                 })
@@ -697,6 +697,7 @@ impl LibraryService {
             "refresh_content completed in {:?}",
             started.elapsed()
         ));
+        crate::perf::record_content_refresh(started.elapsed());
         result
     }
 

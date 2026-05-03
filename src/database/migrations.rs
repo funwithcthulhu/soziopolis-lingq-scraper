@@ -50,26 +50,33 @@ impl Database {
         } else {
             self.migrate_to_v5()?;
         }
-        if version < CURRENT_SCHEMA_VERSION {
+        if version < 6 {
             needs_fts_rebuild |= self.migrate_to_v6()?;
             version = 6;
             self.set_user_version(version)?;
         } else {
             needs_fts_rebuild |= self.migrate_to_v6()?;
         }
-        if version < CURRENT_SCHEMA_VERSION {
+        if version < 7 {
             needs_fts_rebuild |= self.migrate_to_v7()?;
             version = 7;
             self.set_user_version(version)?;
         } else {
             needs_fts_rebuild |= self.migrate_to_v7()?;
         }
-        if version < CURRENT_SCHEMA_VERSION {
+        if version < 8 {
             needs_fts_rebuild |= self.migrate_to_v8()?;
-            version = CURRENT_SCHEMA_VERSION;
+            version = 8;
             self.set_user_version(version)?;
         } else {
             needs_fts_rebuild |= self.migrate_to_v8()?;
+        }
+        if version < CURRENT_SCHEMA_VERSION {
+            needs_fts_rebuild |= self.migrate_to_v9()?;
+            version = CURRENT_SCHEMA_VERSION;
+            self.set_user_version(version)?;
+        } else {
+            needs_fts_rebuild |= self.migrate_to_v9()?;
         }
 
         self.rebuild_fts_if_needed(needs_fts_rebuild)?;
@@ -245,6 +252,54 @@ impl Database {
             "#,
         )?;
         Ok(changed)
+    }
+
+    pub(super) fn migrate_to_v9(&self) -> Result<bool> {
+        let changed =
+            self.add_column_if_missing("articles", "generated_topic", "TEXT NOT NULL DEFAULT ''")?;
+        self.conn.execute_batch(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_articles_generated_topic ON articles(generated_topic);
+            CREATE INDEX IF NOT EXISTS idx_articles_effective_topic
+                ON articles(LOWER(COALESCE(NULLIF(custom_topic, ''), generated_topic)));
+            CREATE INDEX IF NOT EXISTS idx_articles_uploaded_section_words
+                ON articles(uploaded_to_lingq, section, word_count);
+            CREATE INDEX IF NOT EXISTS idx_articles_title_nocase
+                ON articles(LOWER(title));
+            "#,
+        )?;
+        self.conn.execute_batch(
+            r#"
+            DROP TRIGGER IF EXISTS articles_ai;
+            DROP TRIGGER IF EXISTS articles_ad;
+            DROP TRIGGER IF EXISTS articles_au;
+            DROP TABLE IF EXISTS articles_fts;
+
+            CREATE VIRTUAL TABLE articles_fts USING fts5(
+                title, subtitle, teaser, preview_summary, author, section, custom_topic, generated_topic, body_text, url,
+                content='articles', content_rowid='id'
+            );
+
+            CREATE TRIGGER articles_ai AFTER INSERT ON articles BEGIN
+                INSERT INTO articles_fts(rowid, title, subtitle, teaser, preview_summary, author, section, custom_topic, generated_topic, body_text, url)
+                VALUES (new.id, new.title, new.subtitle, new.teaser, new.preview_summary, new.author, new.section, new.custom_topic, new.generated_topic, new.body_text, new.url);
+            END;
+
+            CREATE TRIGGER articles_ad AFTER DELETE ON articles BEGIN
+                INSERT INTO articles_fts(articles_fts, rowid, title, subtitle, teaser, preview_summary, author, section, custom_topic, generated_topic, body_text, url)
+                VALUES('delete', old.id, old.title, old.subtitle, old.teaser, old.preview_summary, old.author, old.section, old.custom_topic, old.generated_topic, old.body_text, old.url);
+            END;
+
+            CREATE TRIGGER articles_au AFTER UPDATE ON articles BEGIN
+                INSERT INTO articles_fts(articles_fts, rowid, title, subtitle, teaser, preview_summary, author, section, custom_topic, generated_topic, body_text, url)
+                VALUES('delete', old.id, old.title, old.subtitle, old.teaser, old.preview_summary, old.author, old.section, old.custom_topic, old.generated_topic, old.body_text, old.url);
+                INSERT INTO articles_fts(rowid, title, subtitle, teaser, preview_summary, author, section, custom_topic, generated_topic, body_text, url)
+                VALUES (new.id, new.title, new.subtitle, new.teaser, new.preview_summary, new.author, new.section, new.custom_topic, new.generated_topic, new.body_text, new.url);
+            END;
+            "#,
+        )?;
+        let _ = changed;
+        Ok(true)
     }
 
     pub(super) fn rebuild_fts_if_needed(&self, force_rebuild: bool) -> Result<()> {
