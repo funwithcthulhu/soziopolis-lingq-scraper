@@ -83,7 +83,7 @@ The app also stores lightweight process state in SQLite:
 - `job_history`
   - append-oriented summary history
 
-The queue payload tables currently store JSON payloads. That keeps schema churn low while the job model remains small and app-local.
+The queue payload tables currently store JSON payloads. That keeps the schema simpler while the job model remains small and app-local.
 
 ## Indexes
 
@@ -97,4 +97,4 @@ Important indexes cover:
 - generated/effective topic
 - case-insensitive title sort
 
-These support the library’s main filter and sort paths without moving away from SQLite.
+These indexes cover the library's main filter and sort paths without moving away from SQLite.

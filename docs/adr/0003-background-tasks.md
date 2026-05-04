@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-The app performs network scraping, import, refresh, and upload work that should not block the GUI thread. At the same time, the codebase is intentionally lightweight and does not need a larger async runtime model everywhere.
+The app does network scraping, imports, refreshes, and uploads that should not block the GUI thread. At the same time, the codebase does not need a larger async runtime everywhere.
 
 ## Decision
 
@@ -16,7 +16,7 @@ Wrap worker execution with panic capture so internal crashes become structured t
 
 ## Consequences
 
-- the GUI remains responsive during browse/import/upload flows
+- the GUI remains responsive during browse, import, and upload flows
 - failures surface through `AppError` instead of application crashes
-- diagnostics can retain recent internal-task failures
+- diagnostics can retain recent internal task failures
 - task code should stay explicit about progress, cancellation, and retryability

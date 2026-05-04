@@ -58,8 +58,8 @@ pub struct BrowseResponse {
 
 #[derive(Debug, Clone)]
 pub enum BrowseSessionState {
-    CurrentSection(SectionBrowseState),
-    AllSections(AllSectionsBrowseState),
+    CurrentSection(Box<SectionBrowseState>),
+    AllSections(Box<AllSectionsBrowseState>),
 }
 
 pub struct BrowseService;
@@ -83,7 +83,7 @@ impl BrowseService {
             articles: state.articles.clone(),
             report: state.report.clone(),
             exhausted: state.exhausted,
-            session_state: Some(BrowseSessionState::CurrentSection(state)),
+            session_state: Some(BrowseSessionState::CurrentSection(Box::new(state))),
         })
     }
 
@@ -103,7 +103,7 @@ impl BrowseService {
             articles: state.articles.clone(),
             report: state.report.clone(),
             exhausted: state.exhausted,
-            session_state: Some(BrowseSessionState::CurrentSection(state)),
+            session_state: Some(BrowseSessionState::CurrentSection(Box::new(state))),
         })
     }
 
@@ -121,7 +121,7 @@ impl BrowseService {
             articles: result.articles,
             report: result.report,
             exhausted: result.exhausted,
-            session_state: Some(BrowseSessionState::AllSections(state)),
+            session_state: Some(BrowseSessionState::AllSections(Box::new(state))),
         })
     }
 
@@ -141,7 +141,7 @@ impl BrowseService {
             articles: result.articles,
             report: result.report,
             exhausted: result.exhausted,
-            session_state: Some(BrowseSessionState::AllSections(state)),
+            session_state: Some(BrowseSessionState::AllSections(Box::new(state))),
         })
     }
 
@@ -604,68 +604,6 @@ fn worker_upload_articles(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{
-        configured_upload_worker_cap_from_env, import_worker_count, remember_article_fingerprint,
-        upload_worker_count,
-    };
-    use crate::soziopolis::{Article, DiscoverySourceKind};
-    use std::collections::HashSet;
-
-    fn sample_article(url: &str) -> Article {
-        Article {
-            url: url.to_owned(),
-            title: "Sample".to_owned(),
-            subtitle: String::new(),
-            teaser: "Teaser".to_owned(),
-            author: "Author".to_owned(),
-            date: "2026-05-03".to_owned(),
-            published_at: "2026-05-03".to_owned(),
-            section: "Essay".to_owned(),
-            source_kind: DiscoverySourceKind::Section.as_str().to_owned(),
-            source_label: "Essays".to_owned(),
-            body_text: "One two three.".to_owned(),
-            clean_text: String::new(),
-            word_count: 3,
-            fetched_at: "2026-05-03T12:00:00Z".to_owned(),
-        }
-    }
-
-    #[test]
-    fn import_worker_count_is_bounded() {
-        assert_eq!(import_worker_count(0), 1);
-        assert_eq!(import_worker_count(1), 1);
-        assert_eq!(import_worker_count(3), 3);
-        assert_eq!(import_worker_count(20), 4);
-    }
-
-    #[test]
-    fn upload_worker_count_is_bounded() {
-        assert_eq!(upload_worker_count(0), 1);
-        assert_eq!(upload_worker_count(1), 1);
-        assert_eq!(upload_worker_count(2), 2);
-        assert_eq!(upload_worker_count(12), 2);
-    }
-
-    #[test]
-    fn configured_upload_worker_cap_defaults_to_two() {
-        assert_eq!(configured_upload_worker_cap_from_env(None), 2);
-        assert_eq!(configured_upload_worker_cap_from_env(Some("3")), 3);
-        assert_eq!(configured_upload_worker_cap_from_env(Some("5")), 3);
-    }
-
-    #[test]
-    fn remember_article_fingerprint_rejects_duplicate_content_in_same_batch() {
-        let mut seen = HashSet::new();
-        let first = sample_article("https://example.com/first");
-        let second = sample_article("https://example.com/second");
-
-        assert!(remember_article_fingerprint(&mut seen, &first));
-        assert!(!remember_article_fingerprint(&mut seen, &second));
-    }
-}
-
 pub struct LibraryService;
 
 impl LibraryService {
@@ -868,5 +806,67 @@ impl LingqService {
                 started.elapsed()
             ));
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        configured_upload_worker_cap_from_env, import_worker_count, remember_article_fingerprint,
+        upload_worker_count,
+    };
+    use crate::soziopolis::{Article, DiscoverySourceKind};
+    use std::collections::HashSet;
+
+    fn sample_article(url: &str) -> Article {
+        Article {
+            url: url.to_owned(),
+            title: "Sample".to_owned(),
+            subtitle: String::new(),
+            teaser: "Teaser".to_owned(),
+            author: "Author".to_owned(),
+            date: "2026-05-03".to_owned(),
+            published_at: "2026-05-03".to_owned(),
+            section: "Essay".to_owned(),
+            source_kind: DiscoverySourceKind::Section.as_str().to_owned(),
+            source_label: "Essays".to_owned(),
+            body_text: "One two three.".to_owned(),
+            clean_text: String::new(),
+            word_count: 3,
+            fetched_at: "2026-05-03T12:00:00Z".to_owned(),
+        }
+    }
+
+    #[test]
+    fn import_worker_count_is_bounded() {
+        assert_eq!(import_worker_count(0), 1);
+        assert_eq!(import_worker_count(1), 1);
+        assert_eq!(import_worker_count(3), 3);
+        assert_eq!(import_worker_count(20), 4);
+    }
+
+    #[test]
+    fn upload_worker_count_is_bounded() {
+        assert_eq!(upload_worker_count(0), 1);
+        assert_eq!(upload_worker_count(1), 1);
+        assert_eq!(upload_worker_count(2), 2);
+        assert_eq!(upload_worker_count(12), 2);
+    }
+
+    #[test]
+    fn configured_upload_worker_cap_defaults_to_two() {
+        assert_eq!(configured_upload_worker_cap_from_env(None), 2);
+        assert_eq!(configured_upload_worker_cap_from_env(Some("3")), 3);
+        assert_eq!(configured_upload_worker_cap_from_env(Some("5")), 3);
+    }
+
+    #[test]
+    fn remember_article_fingerprint_rejects_duplicate_content_in_same_batch() {
+        let mut seen = HashSet::new();
+        let first = sample_article("https://example.com/first");
+        let second = sample_article("https://example.com/second");
+
+        assert!(remember_article_fingerprint(&mut seen, &first));
+        assert!(!remember_article_fingerprint(&mut seen, &second));
     }
 }

@@ -1,6 +1,6 @@
 use super::*;
 
-/// Yield control back to the async executor without depending on tokio.
+/// Yield once without depending on Tokio.
 async fn async_std_yield() {
     struct Yield(bool);
     impl std::future::Future for Yield {
@@ -49,7 +49,7 @@ fn execute_blocking_task<T>(
     }
 }
 
-/// Run a blocking closure on a background thread, returning a future.
+/// Run a blocking closure on a worker thread and poll for the result from iced.
 pub(super) async fn run_blocking<T: Send + 'static>(
     task_kind: &'static str,
     task_label: impl Into<String>,
@@ -62,7 +62,6 @@ pub(super) async fn run_blocking<T: Send + 'static>(
         let result = execute_blocking_task(task_kind, &task_label_for_thread, f);
         let _ = tx.send(result);
     });
-    // Poll in a yielding loop — iced runs this on its async executor.
     loop {
         match rx.try_recv() {
             Ok(result) => return result,
@@ -142,8 +141,6 @@ impl App {
         self.set_notice(notice, NoticeKind::Error);
     }
 
-    // ── Browse task spawning ────────────────────────────────────
-
     pub(super) fn spawn_browse_refresh(&mut self) -> Task<Message> {
         self.browse_scope = BrowseScope::CurrentSection;
         self.browse_scope_label = self.browse_scope.label().to_owned();
@@ -201,7 +198,7 @@ impl App {
                 let task_label = format!("load more {}", self.browse_section);
                 Task::perform(
                     run_blocking_app_result("browse", task_label, move || {
-                        BrowseService::continue_browse_section(state, limit)
+                        BrowseService::continue_browse_section(*state, limit)
                             .map_err(|err| AppError::classify("continue browse", err.to_string()))
                     }),
                     move |result| Message::BrowseLoaded { request_id, result },
@@ -225,7 +222,7 @@ impl App {
         match self.browse_session_state.clone() {
             Some(BrowseSessionState::AllSections(state)) => Task::perform(
                 run_blocking_app_result("browse", "load more all sections", move || {
-                    BrowseService::continue_browse_all_sections(state, limit)
+                    BrowseService::continue_browse_all_sections(*state, limit)
                         .map_err(|err| AppError::classify("continue browse all", err.to_string()))
                 }),
                 move |result| Message::BrowseLoaded { request_id, result },
@@ -233,8 +230,6 @@ impl App {
             _ => self.spawn_browse_all_sections(),
         }
     }
-
-    // ── Content refresh ─────────────────────────────────────────
 
     pub(super) fn spawn_content_refresh(&mut self, reason: &str) -> Task<Message> {
         self.library_loading = true;
@@ -262,8 +257,6 @@ impl App {
             },
         )
     }
-
-    // ── Preview ─────────────────────────────────────────────────
 
     pub(super) fn spawn_open_preview(&mut self, url: String) -> Task<Message> {
         self.preview_loading = true;
@@ -293,11 +286,9 @@ impl App {
                 });
                 Ok((article, stored))
             }),
-            Message::PreviewLoaded,
+            |result| Message::PreviewLoaded(Box::new(result)),
         )
     }
-
-    // ── LingQ ───────────────────────────────────────────────────
 
     pub(super) fn spawn_load_collections(&mut self) -> Task<Message> {
         if self.lingq_api_key.trim().is_empty() {
@@ -332,8 +323,6 @@ impl App {
             Message::LingqLoggedIn,
         )
     }
-
-    // ── Import / Upload job spawning ────────────────────────────
 
     pub(super) fn spawn_import_job(
         &mut self,
@@ -473,8 +462,6 @@ impl App {
         )
     }
 
-    // ── Job queue management ────────────────────────────────────
-
     pub(super) fn next_job_id(&mut self) -> u64 {
         self.next_job_id = self.next_job_id.wrapping_add(1);
         self.next_job_id
@@ -545,14 +532,11 @@ impl App {
     pub(super) fn start_job(&mut self, job: QueuedJob) -> Task<Message> {
         let cancel_flag = Arc::new(AtomicBool::new(false));
         self.active_job = Some(ActiveJob {
-            id: job.id,
-            kind: job.kind,
             label: job.label.clone(),
             total: job.total,
             processed: 0,
             succeeded: 0,
             failed: 0,
-            current_item: String::new(),
             cancel_flag: cancel_flag.clone(),
         });
         self.batch_fetching = job.kind == JobKind::Import;

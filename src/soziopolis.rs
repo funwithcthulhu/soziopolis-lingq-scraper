@@ -49,6 +49,16 @@ use parse::*;
 static HTML_CACHE: OnceLock<Mutex<HashMap<String, CachedHtml>>> = OnceLock::new();
 static SUMMARY_CACHE: OnceLock<Mutex<HashMap<String, Vec<ArticleSummary>>>> = OnceLock::new();
 
+struct ArticleCollectionTarget<'a> {
+    fallback_section: Option<&'a str>,
+    source_url: &'a str,
+    source_kind: DiscoverySourceKind,
+    limit: usize,
+    seen: &'a mut HashSet<String>,
+    articles: &'a mut Vec<ArticleSummary>,
+    report: &'a mut DiscoveryReport,
+}
+
 #[derive(Clone)]
 pub struct SoziopolisClient {
     client: Client,
@@ -95,13 +105,15 @@ impl SoziopolisClient {
         report.record_source_visit(DiscoverySourceKind::Section);
         self.collect_articles_from_document(
             &first_page_document,
-            Some(section.label),
-            &first_page_url,
-            DiscoverySourceKind::Section,
-            usize::MAX,
-            &mut seen_article_urls,
-            &mut articles,
-            &mut report,
+            ArticleCollectionTarget {
+                fallback_section: Some(section.label),
+                source_url: &first_page_url,
+                source_kind: DiscoverySourceKind::Section,
+                limit: usize::MAX,
+                seen: &mut seen_article_urls,
+                articles: &mut articles,
+                report: &mut report,
+            },
         );
 
         let pending_page_urls =
@@ -153,13 +165,15 @@ impl SoziopolisClient {
                 .record_source_visit(DiscoverySourceKind::Section);
             self.collect_articles_from_document(
                 &document,
-                Some(state.section.label),
-                &page_url,
-                DiscoverySourceKind::Section,
-                target_limit,
-                &mut state.seen_article_urls,
-                &mut state.articles,
-                &mut state.report,
+                ArticleCollectionTarget {
+                    fallback_section: Some(state.section.label),
+                    source_url: &page_url,
+                    source_kind: DiscoverySourceKind::Section,
+                    limit: target_limit,
+                    seen: &mut state.seen_article_urls,
+                    articles: &mut state.articles,
+                    report: &mut state.report,
+                },
             );
 
             for discovered_url in
@@ -287,13 +301,15 @@ impl SoziopolisClient {
         let mut report = DiscoveryReport::default();
         self.collect_articles_from_document(
             &document,
-            fallback_section,
-            url,
-            DiscoverySourceKind::Section,
-            limit,
-            &mut seen,
-            &mut articles,
-            &mut report,
+            ArticleCollectionTarget {
+                fallback_section,
+                source_url: url,
+                source_kind: DiscoverySourceKind::Section,
+                limit,
+                seen: &mut seen,
+                articles: &mut articles,
+                report: &mut report,
+            },
         );
         Ok(articles)
     }
@@ -423,33 +439,23 @@ impl SoziopolisClient {
         Err(last_error.unwrap_or_else(|| anyhow::anyhow!("network: failed to fetch {url}")))
     }
 
-    fn collect_articles_from_document(
-        &self,
-        document: &Html,
-        fallback_section: Option<&str>,
-        source_url: &str,
-        source_kind: DiscoverySourceKind,
-        limit: usize,
-        seen: &mut HashSet<String>,
-        articles: &mut Vec<ArticleSummary>,
-        report: &mut DiscoveryReport,
-    ) {
+    fn collect_articles_from_document(&self, document: &Html, target: ArticleCollectionTarget<'_>) {
         for summary in cached_article_summaries_for_source(
             self,
             document,
-            fallback_section,
-            source_url,
-            source_kind,
+            target.fallback_section,
+            target.source_url,
+            target.source_kind,
         ) {
-            if articles.len() >= limit {
+            if target.articles.len() >= target.limit {
                 break;
             }
-            if !seen.insert(summary.url.clone()) {
-                report.deduped_articles += 1;
+            if !target.seen.insert(summary.url.clone()) {
+                target.report.deduped_articles += 1;
                 continue;
             }
-            articles.push(summary);
-            report.record_article(source_kind);
+            target.articles.push(summary);
+            target.report.record_article(target.source_kind);
         }
     }
 }
@@ -555,13 +561,15 @@ mod tests {
 
         client.collect_articles_from_document(
             &document,
-            Some("Essays"),
-            "https://www.soziopolis.de/texte/essay.html",
-            DiscoverySourceKind::Section,
-            10,
-            &mut seen,
-            &mut articles,
-            &mut report,
+            ArticleCollectionTarget {
+                fallback_section: Some("Essays"),
+                source_url: "https://www.soziopolis.de/texte/essay.html",
+                source_kind: DiscoverySourceKind::Section,
+                limit: 10,
+                seen: &mut seen,
+                articles: &mut articles,
+                report: &mut report,
+            },
         );
 
         assert_eq!(articles.len(), 2);
@@ -591,13 +599,15 @@ mod tests {
 
         client.collect_articles_from_document(
             &document,
-            Some("Essays"),
-            "https://www.soziopolis.de/texte/essay.html",
-            DiscoverySourceKind::Section,
-            10,
-            &mut seen,
-            &mut articles,
-            &mut report,
+            ArticleCollectionTarget {
+                fallback_section: Some("Essays"),
+                source_url: "https://www.soziopolis.de/texte/essay.html",
+                source_kind: DiscoverySourceKind::Section,
+                limit: 10,
+                seen: &mut seen,
+                articles: &mut articles,
+                report: &mut report,
+            },
         );
 
         assert!(articles.len() >= 2);
@@ -621,13 +631,15 @@ mod tests {
 
         client.collect_articles_from_document(
             &document,
-            Some("Interviews"),
-            "https://www.soziopolis.de/texte/interview.html",
-            DiscoverySourceKind::Section,
-            10,
-            &mut seen,
-            &mut articles,
-            &mut report,
+            ArticleCollectionTarget {
+                fallback_section: Some("Interviews"),
+                source_url: "https://www.soziopolis.de/texte/interview.html",
+                source_kind: DiscoverySourceKind::Section,
+                limit: 10,
+                seen: &mut seen,
+                articles: &mut articles,
+                report: &mut report,
+            },
         );
 
         assert!(articles.len() >= 2);

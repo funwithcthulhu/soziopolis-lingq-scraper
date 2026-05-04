@@ -3,7 +3,6 @@ use super::*;
 impl App {
     pub(super) fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            // ── Navigation ──────────────────────────────────────
             Message::SwitchView(view) => {
                 self.current_view = view;
                 self.save_settings();
@@ -18,21 +17,14 @@ impl App {
                 Task::none()
             }
             Message::Tick => {
-                // Expire notices after 7 seconds
-                if let Some(notice) = &self.notice {
-                    if notice.created_at.elapsed() > Duration::from_secs(7) {
-                        self.notice = None;
-                    }
+                if let Some(notice) = &self.notice
+                    && notice.created_at.elapsed() > Duration::from_secs(7)
+                {
+                    self.notice = None;
                 }
                 Task::none()
             }
-            Message::NoticeExpired => {
-                self.notice = None;
-                Task::none()
-            }
-            Message::Noop => Task::none(),
 
-            // ── Browse ──────────────────────────────────────────
             Message::BrowseSectionChanged(section) => {
                 self.browse_section = section;
                 self.browse_limit = 80;
@@ -150,7 +142,6 @@ impl App {
                 Task::none()
             }
 
-            // ── Preview ─────────────────────────────────────────
             Message::OpenPreview(url) => self.spawn_open_preview(url),
             Message::OpenLibraryPreview(id) => {
                 match self
@@ -171,7 +162,7 @@ impl App {
             }
             Message::PreviewLoaded(result) => {
                 self.preview_loading = false;
-                match result {
+                match *result {
                     Ok((article, stored)) => {
                         self.preview_article = Some(article);
                         self.preview_stored_article = stored;
@@ -204,7 +195,6 @@ impl App {
                 Task::none()
             }
 
-            // ── Library ─────────────────────────────────────────
             Message::LibrarySearchChanged(s) => {
                 self.library_search = s;
                 self.library_page_index = 0;
@@ -303,7 +293,6 @@ impl App {
                 Task::none()
             }
 
-            // ── Article detail ──────────────────────────────────
             Message::ArticleBack => {
                 self.current_view = View::Library;
                 self.save_settings();
@@ -319,7 +308,6 @@ impl App {
                 }
             }
 
-            // ── LingQ auth ─────────────────────────────────────
             Message::LingqAuthModeChanged(mode) => {
                 self.lingq_auth_mode = mode;
                 Task::none()
@@ -397,7 +385,6 @@ impl App {
                 }
             }
 
-            // ── LingQ upload selection ──────────────────────────
             Message::LingqClearUploadSelection => {
                 self.lingq_selected_articles.clear();
                 Task::none()
@@ -425,19 +412,6 @@ impl App {
                 self.enqueue_job(job)
             }
 
-            // ── Background task results ─────────────────────────
-            Message::ImportProgress(progress) => {
-                if let Some(job) = &mut self.active_job {
-                    if job.kind == JobKind::Import {
-                        job.processed = progress.processed;
-                        job.succeeded = progress.saved_count;
-                        job.failed = progress.failed_count;
-                        job.current_item = progress.current_item.clone();
-                    }
-                }
-                self.import_progress = Some(progress);
-                Task::none()
-            }
             Message::BatchFetched {
                 job_id,
                 saved_count,
@@ -517,19 +491,6 @@ impl App {
                     );
                 }
                 queue_task
-            }
-            Message::UploadProgressMsg { job_id, progress } => {
-                if let Some(job) = &mut self.active_job {
-                    if job.id == job_id && job.kind == JobKind::Upload {
-                        job.processed = progress.processed;
-                        job.total = progress.total;
-                        job.succeeded = progress.uploaded;
-                        job.failed = progress.failed_count;
-                        job.current_item = progress.current_item.clone();
-                    }
-                }
-                self.upload_progress = Some(progress);
-                Task::none()
             }
             Message::BatchUploaded {
                 job_id,
@@ -657,7 +618,6 @@ impl App {
                 Task::none()
             }
 
-            // ── Job queue ───────────────────────────────────────
             Message::CancelActiveJob => {
                 if let Some(job) = &self.active_job {
                     job.cancel_flag.store(true, Ordering::Relaxed);
@@ -689,11 +649,10 @@ impl App {
                     .queued_jobs
                     .iter()
                     .position(|j| matches!(j.request, QueuedJobRequest::Upload { .. }))
+                    && let Some(job) = self.queued_jobs.remove(idx)
                 {
-                    if let Some(job) = self.queued_jobs.remove(idx) {
-                        self.persist_queue_state();
-                        return self.start_job(job);
-                    }
+                    self.persist_queue_state();
+                    return self.start_job(job);
                 }
                 self.set_notice("No queued upload to run.", NoticeKind::Info);
                 Task::none()
@@ -773,24 +732,23 @@ impl App {
                 self.enqueue_job(job)
             }
 
-            // ── Diagnostics ─────────────────────────────────────
             Message::SelectDiagnosticsJob(id) => {
                 self.diagnostics_selected_job_id = Some(id);
                 Task::none()
             }
             Message::OpenDataFolder => {
-                if let Ok(path) = app_paths::data_dir() {
-                    if let Err(err) = open_path_in_explorer(&path) {
-                        self.set_notice(err, NoticeKind::Error);
-                    }
+                if let Ok(path) = app_paths::data_dir()
+                    && let Err(err) = open_path_in_explorer(&path)
+                {
+                    self.set_notice(err, NoticeKind::Error);
                 }
                 Task::none()
             }
             Message::OpenLogFile => {
-                if let Ok(path) = app_paths::app_log_path() {
-                    if let Err(err) = open_log_in_notepad(&path) {
-                        self.set_notice(err, NoticeKind::Error);
-                    }
+                if let Ok(path) = app_paths::app_log_path()
+                    && let Err(err) = open_log_in_notepad(&path)
+                {
+                    self.set_notice(err, NoticeKind::Error);
                 }
                 Task::none()
             }
@@ -873,8 +831,6 @@ impl App {
             }
         }
     }
-
-    // ── Internal helpers used by update ──────────────────────────
 
     fn persist_lingq_api_key(&mut self) -> bool {
         let api_key = self.lingq_api_key.trim().to_owned();
@@ -1083,23 +1039,72 @@ fn create_support_bundle(app: &App) -> Result<PathBuf, String> {
     summary.push(format!("Current view: {}", app.current_view.as_str()));
     summary.push(format!("Library articles: {}", app.library_articles.len()));
     summary.push(format!("Browse articles: {}", app.browse_articles.len()));
+    summary.push(format!("Queued jobs: {}", app.queued_jobs.len()));
+    summary.push(format!(
+        "Completed jobs in memory: {}",
+        app.completed_jobs.len()
+    ));
+    summary.push(format!(
+        "Recent task failures: {}",
+        app.recent_task_failures.len()
+    ));
 
     fs::write(bundle_dir.join("README.txt"), summary.join("\r\n")).map_err(|e| e.to_string())?;
 
-    if let Ok(path) = app_paths::settings_path() {
-        if path.exists() {
-            let _ = fs::copy(&path, bundle_dir.join("settings.json"));
+    if let Ok(path) = app_paths::settings_path()
+        && path.exists()
+    {
+        let _ = fs::copy(&path, bundle_dir.join("settings.json"));
+    }
+    if let Ok(path) = app_paths::app_log_path()
+        && path.exists()
+    {
+        let _ = fs::copy(&path, bundle_dir.join("soziopolis-reader.log"));
+    }
+    if let Ok(path) = app_paths::database_path()
+        && path.exists()
+    {
+        let _ = fs::copy(&path, bundle_dir.join("soziopolis_lingq_tool.db"));
+        for extra_path in [path.with_extension("db-wal"), path.with_extension("db-shm")] {
+            if extra_path.exists()
+                && let Some(name) = extra_path.file_name()
+            {
+                let _ = fs::copy(&extra_path, bundle_dir.join(name));
+            }
         }
     }
-    if let Ok(path) = app_paths::app_log_path() {
-        if path.exists() {
-            let _ = fs::copy(&path, bundle_dir.join("soziopolis-reader.log"));
-        }
-    }
-    if let Ok(path) = app_paths::database_path() {
-        if path.exists() {
-            let _ = fs::copy(&path, bundle_dir.join("soziopolis_lingq_tool.db"));
-        }
+
+    let queue_snapshot = QueueSnapshot {
+        next_job_id: app.next_job_id,
+        queue_paused: app.queue_paused,
+        queued_jobs: app.queued_jobs.iter().cloned().collect(),
+        completed_jobs: app.completed_jobs.iter().cloned().collect(),
+        failed_fetches: app.failed_fetches.clone(),
+        failed_uploads: app.last_failed_uploads.clone(),
+    };
+    let queue_snapshot_json =
+        serde_json::to_string_pretty(&queue_snapshot).map_err(|e| e.to_string())?;
+    fs::write(bundle_dir.join("queue-snapshot.json"), queue_snapshot_json)
+        .map_err(|e| e.to_string())?;
+
+    if !app.recent_task_failures.is_empty() {
+        let task_failures = app
+            .recent_task_failures
+            .iter()
+            .map(|failure| {
+                let details = failure.details.as_deref().unwrap_or("");
+                format!(
+                    "[{}] {}: {} {}",
+                    failure.kind.label(),
+                    failure.operation,
+                    failure.message,
+                    details
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\r\n");
+        fs::write(bundle_dir.join("task-failures.txt"), task_failures)
+            .map_err(|e| e.to_string())?;
     }
 
     Ok(bundle_dir)

@@ -1,8 +1,8 @@
 # Reliability
 
-This app is local-first, network-dependent, and GUI-driven, so reliability work focuses on graceful failure, state recovery, and minimizing surprise.
+This app depends on the network, writes local state, and runs long jobs from a GUI. The main reliability concerns are failed requests, corrupted local state, and background-task crashes.
 
-## Current safeguards
+## Safeguards in the current build
 
 ### Panic-safe background tasks
 
@@ -34,7 +34,7 @@ Import flow protects against duplicates in two places:
 
 That keeps retries and multi-section selection flows from creating repeated local entries.
 
-### SQLite durability defaults
+### SQLite defaults
 
 The app uses:
 
@@ -43,7 +43,7 @@ The app uses:
 - `foreign_keys = ON`
 - `busy_timeout = 5s`
 
-Those settings balance responsiveness with durable local persistence for a single-user desktop app.
+Those settings keep the app responsive without giving up sensible durability for a single-user desktop app.
 
 ### One-time backfills
 
@@ -56,7 +56,7 @@ Maintenance backfills run at open time for:
 
 Each backfill is guarded by an `app_state` flag so it runs once per database.
 
-## Diagnostics posture
+## Diagnostics
 
 The Diagnostics screen can:
 
@@ -80,4 +80,4 @@ Performance counters currently expose:
 - queue payload tables are still JSON blobs rather than normalized relational tables
 - some library rendering still has an in-memory fallback path when no page cache is ready
 
-Those are reasonable local-first tradeoffs today, but they are good candidates for future hardening if the app grows.
+Those are reasonable tradeoffs for the current size of the app, but they are the first places to revisit if it grows.

@@ -142,11 +142,11 @@ pub(super) fn cached_article_summaries_for_source(
         source_kind,
         &document_summary_fingerprint(document),
     );
-    if let Ok(cache) = summary_cache().lock() {
-        if let Some(summaries) = cache.get(&cache_key) {
-            crate::perf::record_browse_summary_cache_hit();
-            return summaries.clone();
-        }
+    if let Ok(cache) = summary_cache().lock()
+        && let Some(summaries) = cache.get(&cache_key)
+    {
+        crate::perf::record_browse_summary_cache_hit();
+        return summaries.clone();
     }
     crate::perf::record_browse_summary_cache_miss();
 

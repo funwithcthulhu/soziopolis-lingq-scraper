@@ -143,33 +143,33 @@ impl Database {
         let mut database = Self { conn };
         database.configure_connection()?;
         database.migrate()?;
-        if let Ok(backfilled) = database.backfill_preview_summaries_once() {
-            if backfilled > 0 {
-                crate::logging::info(format!(
-                    "backfilled preview summaries for {backfilled} existing article(s)"
-                ));
-            }
+        if let Ok(backfilled) = database.backfill_preview_summaries_once()
+            && backfilled > 0
+        {
+            crate::logging::info(format!(
+                "backfilled preview summaries for {backfilled} existing article(s)"
+            ));
         }
-        if let Ok(compacted) = database.clear_duplicate_clean_text_once() {
-            if compacted > 0 {
-                crate::logging::info(format!(
-                    "cleared duplicated clean_text storage for {compacted} existing article(s)"
-                ));
-            }
+        if let Ok(compacted) = database.clear_duplicate_clean_text_once()
+            && compacted > 0
+        {
+            crate::logging::info(format!(
+                "cleared duplicated clean_text storage for {compacted} existing article(s)"
+            ));
         }
-        if let Ok(backfilled) = database.backfill_fingerprints_once() {
-            if backfilled > 0 {
-                crate::logging::info(format!(
-                    "backfilled content fingerprints for {backfilled} existing article(s)"
-                ));
-            }
+        if let Ok(backfilled) = database.backfill_fingerprints_once()
+            && backfilled > 0
+        {
+            crate::logging::info(format!(
+                "backfilled content fingerprints for {backfilled} existing article(s)"
+            ));
         }
-        if let Ok(backfilled) = database.backfill_generated_topics_once() {
-            if backfilled > 0 {
-                crate::logging::info(format!(
-                    "backfilled generated topics for {backfilled} existing article(s)"
-                ));
-            }
+        if let Ok(backfilled) = database.backfill_generated_topics_once()
+            && backfilled > 0
+        {
+            crate::logging::info(format!(
+                "backfilled generated topics for {backfilled} existing article(s)"
+            ));
         }
         Ok(database)
     }

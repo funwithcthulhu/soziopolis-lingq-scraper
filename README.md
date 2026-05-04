@@ -1,6 +1,6 @@
 # Soziopolis Reader
 
-Soziopolis Reader is a Windows-first Rust desktop app for browsing articles from `soziopolis.de`, saving them into a local SQLite library, and uploading selected pieces to LingQ.
+Soziopolis Reader is a Rust desktop app for Windows. It browses articles from `soziopolis.de`, saves them in a local SQLite library, and uploads selected articles to LingQ.
 
 It is intentionally GUI-first and GUI-only: browsing, importing, review, diagnostics, and LingQ uploads all happen inside the desktop app.
 
@@ -12,16 +12,14 @@ It is intentionally GUI-first and GUI-only: browsing, importing, review, diagnos
 - Upload saved articles to LingQ with stored credentials and collection selection
 - Retry failed imports/uploads and manage a persisted job queue
 - Build a portable folder or a normal Windows installer
-- Generate diagnostics bundles with logs, settings, and queue snapshots
+- Generate diagnostics bundles with logs, settings, database files, and queue snapshots
 
 ## Download
 
-The easiest way to get started is from the latest GitHub release:
+The latest Windows build is published on GitHub:
 
 - Releases: <https://github.com/funwithcthulhu/soziopolis-reader/releases>
-- Latest Windows installer: <https://github.com/funwithcthulhu/soziopolis-reader/releases/latest>
-
-Current packaged release: `v1.1.0`
+- Latest installer: <https://github.com/funwithcthulhu/soziopolis-reader/releases/latest>
 
 ## Quick Start
 
@@ -40,7 +38,7 @@ Current packaged release: `v1.1.0`
 4. Open `LingQ Settings` and connect your LingQ account or token.
 5. Go to `My Library`, choose a LingQ collection, select saved articles, and upload them.
 
-The app keeps a local article library in SQLite, so once an article is imported you can preview, filter, and upload it later without fetching it again.
+The local SQLite library keeps imported articles around, so you can preview, filter, and upload them later without fetching them again.
 
 ## Build From Source
 
@@ -51,7 +49,7 @@ git clone https://github.com/funwithcthulhu/soziopolis-reader.git
 cd soziopolis-reader
 ```
 
-If you downloaded a ZIP instead of cloning, extract it somewhere convenient such as:
+If you downloaded a ZIP instead, extract it somewhere convenient such as:
 
 `C:\projects\soziopolis_reader`
 
@@ -70,7 +68,7 @@ cargo --version
 cargo run
 ```
 
-This launches the GUI.
+This starts the desktop app.
 
 ### 4. Build an optimized executable
 
@@ -82,7 +80,7 @@ Cargo produces:
 
 `target\release\soziopolis_lingq_tool.exe`
 
-The packaged Windows builds rename that executable to `Soziopolis Reader.exe` for distribution.
+Packaged Windows builds rename that executable to `Soziopolis Reader.exe`.
 
 ## Windows Packaging
 
@@ -102,7 +100,7 @@ The portable copy stores:
 - logs
 - diagnostics support bundles
 
-On a new PC, LingQ usually needs to be reconnected once because the token is stored per-machine in Windows Credential Manager.
+On a new PC, LingQ usually needs to be reconnected once because the token lives in Windows Credential Manager for that machine.
 
 ### Installer build
 
@@ -149,15 +147,15 @@ data/
 
 On Windows, LingQ tokens are stored in Windows Credential Manager rather than `settings.json`.
 
-Queued import and upload jobs, recent job history, and retry lists are persisted inside the SQLite database. The `Diagnostics` screen can also generate a timestamped support bundle with logs, settings, a queue snapshot, and a diagnostic summary for troubleshooting.
+Queued import and upload jobs, recent job history, and retry lists are stored in SQLite. The `Diagnostics` screen can also build a timestamped support bundle with the current settings, logs, database files, queue snapshot, and recent task failures.
 
 The internal storage folder keeps the historical `soziopolis_lingq_tool` name so existing installs and upgrades continue to find the same data.
 
 If you want the app and its data in a custom location, use the portable layout instead of the default `%LOCALAPPDATA%` location.
 
-## Development Notes
+## Scope and Assumptions
 
-- The app is currently packaged and tested as a Windows desktop application.
+- The app is packaged and tested as a Windows desktop application.
 - The scraper is tuned for Soziopolis article pages and section listings as they existed on April 16, 2026.
 - If the Soziopolis site layout changes, the scraping selectors may need an update.
 

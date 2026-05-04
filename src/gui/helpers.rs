@@ -324,10 +324,10 @@ pub(super) fn format_job_timestamp(value: &str) -> String {
     if trimmed.is_empty() {
         return "Unknown time".to_owned();
     }
-    if let Ok(epoch) = trimmed.parse::<i64>() {
-        if let Some(ts) = chrono::DateTime::from_timestamp(epoch, 0) {
-            return ts.format("%Y-%m-%d %H:%M:%S UTC").to_string();
-        }
+    if let Ok(epoch) = trimmed.parse::<i64>()
+        && let Some(ts) = chrono::DateTime::from_timestamp(epoch, 0)
+    {
+        return ts.format("%Y-%m-%d %H:%M:%S UTC").to_string();
     }
     trimmed.to_owned()
 }

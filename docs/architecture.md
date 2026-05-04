@@ -1,11 +1,11 @@
 # Architecture
 
-Soziopolis Reader is a local-first Windows desktop application built in Rust with an `iced` GUI, a SQLite data store, and blocking worker tasks for network-heavy operations.
+Soziopolis Reader is a Windows desktop app written in Rust. `iced` handles the GUI, SQLite stores local data, and blocking worker tasks handle scraping, imports, refreshes, and LingQ uploads.
 
-## Runtime shape
+## Code layout
 
 - `src/main.rs`
-  - initializes logging and launches the GUI
+  - starts logging and launches the GUI
 - `src/gui.rs`
   - app shell and active GUI module tree
 - `src/gui/`
@@ -28,7 +28,7 @@ Soziopolis Reader is a local-first Windows desktop application built in Rust wit
 - `src/lingq.rs`
   - LingQ HTTP client
 - `src/app_ops.rs`
-  - thin app-facing operations used by the GUI
+  - small app-facing operations used by the GUI
 
 ## Data flow
 
@@ -38,7 +38,7 @@ Soziopolis Reader is a local-first Windows desktop application built in Rust wit
 4. Services use repositories/database methods plus external clients (`soziopolis`, `lingq`).
 5. Results return to the GUI through typed messages and are applied back into state.
 
-## Current boundary rules
+## Module boundaries
 
 - GUI modules own presentation state and user interaction.
 - Services own cross-step workflows such as import, upload, and refresh.
@@ -59,7 +59,7 @@ The library flow now uses typed query structs from `src/domain.rs`:
   - optional topic grouping
   - paging offset/limit
 
-This keeps query shape stable across GUI, app ops, repositories, and database code.
+These structs keep the query shape consistent from the GUI down to the database.
 
 ## Topic model
 
@@ -74,7 +74,7 @@ The effective topic is:
 
 `custom_topic` if present, otherwise `generated_topic`
 
-That effective-topic model is used for filtering, ordering, and diagnostics.
+That effective topic is used for filtering, ordering, and diagnostics.
 
 ## Background work model
 
@@ -88,9 +88,9 @@ The app uses blocking worker tasks for:
 
 `src/gui/tasks.rs` wraps those tasks with panic capture so worker crashes become `AppError::Internal` instead of taking the GUI down.
 
-## Near-term refactor guidance
+## Likely future cleanup
 
-The next structural splits worth keeping an eye on are:
+If the app grows further, the next cleanup steps are:
 
 - splitting `src/services.rs` into browse/import/library/LingQ submodules
 - splitting `src/database.rs` into article-query and job-persistence submodules

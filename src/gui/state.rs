@@ -72,14 +72,11 @@ pub(super) struct Notice {
 }
 
 pub(super) struct ActiveJob {
-    pub(super) id: u64,
-    pub(super) kind: JobKind,
     pub(super) label: String,
     pub(super) total: usize,
     pub(super) processed: usize,
     pub(super) succeeded: usize,
     pub(super) failed: usize,
-    pub(super) current_item: String,
     pub(super) cancel_flag: Arc<AtomicBool>,
 }
 
@@ -92,7 +89,6 @@ pub struct App {
     pub(super) browse_request_id: u64,
     pub(super) content_refresh_request_id: u64,
 
-    // Browse state
     pub(super) browse_section: String,
     pub(super) browse_limit: usize,
     pub(super) browse_scope: BrowseScope,
@@ -115,7 +111,6 @@ pub struct App {
     pub(super) preview_loading: bool,
     pub(super) show_preview: bool,
 
-    // Library state
     pub(super) library_articles: Vec<ArticleListItem>,
     pub(super) library_stats: Option<LibraryStats>,
     pub(super) library_loading: bool,
@@ -132,7 +127,6 @@ pub struct App {
     pub(super) library_page_cache: Option<ArticleListPage>,
     pub(super) article_detail: Option<StoredArticle>,
 
-    // LingQ state
     pub(super) lingq_api_key: String,
     pub(super) lingq_auth_mode: LingqAuthMode,
     pub(super) lingq_username: String,
@@ -148,7 +142,6 @@ pub struct App {
     pub(super) lingq_loading_collections: bool,
     pub(super) lingq_uploading: bool,
 
-    // Job queue
     pub(super) next_job_id: u64,
     pub(super) queue_paused: bool,
     pub(super) active_job: Option<ActiveJob>,
@@ -267,7 +260,6 @@ impl App {
             app.set_notice(msg, NoticeKind::Info);
         }
 
-        // Build initial tasks: browse + content refresh + optional collections
         let browse_task = app.spawn_browse_refresh();
         let refresh_task = app.spawn_content_refresh("app startup");
         let collections_task = if app.lingq_connected {

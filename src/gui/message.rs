@@ -1,14 +1,10 @@
 use super::*;
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(super) enum Message {
-    // Navigation
     SwitchView(View),
     ToggleLingqSettings,
     ClosePreview,
-
-    // Browse
     BrowseSectionChanged(String),
     BrowseSearchChanged(String),
     BrowseToggleOnlyNew(bool),
@@ -24,14 +20,10 @@ pub(super) enum Message {
         request_id: u64,
         result: Result<BrowseResponse, AppError>,
     },
-
-    // Preview
     OpenPreview(String),
     OpenLibraryPreview(i64),
-    PreviewLoaded(Result<(Article, Option<StoredArticle>), AppError>),
+    PreviewLoaded(Box<Result<(Article, Option<StoredArticle>), AppError>>),
     OpenFullArticle(i64),
-
-    // Library
     LibrarySearchChanged(String),
     LibraryTopicChanged(String),
     LibraryToggleNotUploaded(bool),
@@ -49,13 +41,9 @@ pub(super) enum Message {
     LibraryDeleteArticle(i64),
     LibraryNextPage,
     LibraryPrevPage,
-
-    // Article detail
     ArticleBack,
     ArticleCopyText,
     OpenArticle(i64),
-
-    // LingQ auth
     LingqAuthModeChanged(LingqAuthMode),
     LingqUsernameChanged(String),
     LingqPasswordChanged(String),
@@ -67,13 +55,8 @@ pub(super) enum Message {
     LingqRefreshCollections,
     LingqLoggedIn(Result<String, AppError>),
     CollectionsLoaded(Result<Vec<Collection>, AppError>),
-
-    // LingQ upload selection
     LingqClearUploadSelection,
     LingqUploadSelected,
-
-    // Background task results
-    ImportProgress(ImportProgress),
     BatchFetched {
         job_id: u64,
         saved_count: usize,
@@ -82,10 +65,6 @@ pub(super) enum Message {
         skipped_out_of_range: usize,
         failed: Vec<FailedFetchItem>,
         canceled: bool,
-    },
-    UploadProgressMsg {
-        job_id: u64,
-        progress: UploadProgress,
     },
     BatchUploaded {
         job_id: u64,
@@ -104,8 +83,6 @@ pub(super) enum Message {
         reason: String,
         error: AppError,
     },
-
-    // Job queue
     CancelActiveJob,
     PauseQueue,
     ResumeQueue,
@@ -113,8 +90,6 @@ pub(super) enum Message {
     ClearQueuedJobs,
     RetryFailedImports,
     RetryFailedUploads,
-
-    // Diagnostics
     SelectDiagnosticsJob(u64),
     OpenDataFolder,
     OpenLogFile,
@@ -125,10 +100,6 @@ pub(super) enum Message {
     RebuildSearchIndex,
     VerifyDatabase,
     ClearTaskFailures,
-
-    // Misc
-    NoticeExpired,
     OpenUrl(String),
     Tick,
-    Noop,
 }

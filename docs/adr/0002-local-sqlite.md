@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-The app is single-user, local-first, and Windows desktop oriented. It needs structured persistence, text search, portability, and simple support-bundle generation.
+The app is a single-user Windows desktop tool. It needs structured local persistence, text search, portability, and support bundles that are easy to inspect.
 
 ## Decision
 
@@ -20,7 +20,7 @@ Key configuration:
 
 ## Consequences
 
-- installs remain self-contained
-- diagnostics and support bundles stay straightforward
-- search/indexing can evolve with migrations instead of adding another service
-- the codebase should prefer query/index improvements before considering a heavier DB stack
+- installs stay self-contained
+- diagnostics and support bundles stay simple
+- search and indexing can evolve through migrations instead of another service
+- the codebase should prefer query and index improvements before considering a heavier DB stack

@@ -1,7 +1,5 @@
 use super::*;
 
-// ── Main view dispatch ─────────────────────────────────────────────
-
 impl App {
     pub fn view(&self) -> Element<'_, Message> {
         let sidebar = self.view_sidebar();
@@ -36,8 +34,6 @@ impl App {
             .into()
     }
 
-    // ── Notice bar ─────────────────────────────────────────────────
-
     fn view_notice<'a>(&'a self, notice: &'a Notice) -> Element<'a, Message> {
         let color = notice_color(notice.kind);
         container(text(&notice.message).color(color).size(14))
@@ -45,8 +41,6 @@ impl App {
             .width(Length::Fill)
             .into()
     }
-
-    // ── Sidebar ────────────────────────────────────────────────────
 
     fn view_sidebar(&self) -> Element<'_, Message> {
         let mut col = Column::new().spacing(4).padding(16).width(240);
@@ -79,7 +73,6 @@ impl App {
                 .on_press(Message::ToggleLingqSettings),
         );
 
-        // Library stats in sidebar
         if self.current_view == View::Library {
             col = col.push(Space::with_height(8));
             col = col.push(horizontal_rule(1));
@@ -111,7 +104,6 @@ impl App {
             }
         }
 
-        // Failed imports in sidebar (browse view)
         if self.current_view == View::Browse {
             col = col.push(Space::with_height(8));
             col = col.push(horizontal_rule(1));
@@ -166,8 +158,6 @@ impl App {
             .into()
     }
 
-    // ── Browse view ────────────────────────────────────────────────
-
     fn view_browse(&self) -> Element<'_, Message> {
         let browse_busy = self.batch_fetching || self.browse_loading;
         let search = self.browse_search.trim().to_lowercase();
@@ -182,7 +172,6 @@ impl App {
             .filter(|a| !self.browse_imported_urls.contains(&a.url))
             .count();
 
-        // Section picker
         let section_options: Vec<String> = SECTIONS.iter().map(|s| s.label.to_owned()).collect();
         let current_section_label = SECTIONS
             .iter()
@@ -214,7 +203,6 @@ impl App {
                 .color(TEXT_SECONDARY),
         );
 
-        // Action row: buttons + checkbox + stats, all on one line
         let mut action_row = Row::new().spacing(6).align_y(iced::Alignment::Center);
         if !browse_busy {
             action_row =
@@ -263,7 +251,6 @@ impl App {
             .color(TEXT_SECONDARY),
         );
 
-        // Import progress
         let progress_el: Element<Message> = if let Some(progress) = &self.import_progress {
             let total = progress.total.unwrap_or(0);
             let fraction = if total == 0 {
@@ -285,7 +272,6 @@ impl App {
             Space::with_height(0).into()
         };
 
-        // Article list
         let visible: Vec<&ArticleSummary> = self
             .browse_articles
             .iter()
@@ -311,9 +297,8 @@ impl App {
         content = content.push(progress_el);
         content = content.push(scrollable(article_list).height(Length::Fill));
 
-        // Load more button at bottom
         if !browse_busy
-            && !(self.browse_scope == BrowseScope::CurrentSection && self.browse_end_reached)
+            && (self.browse_scope != BrowseScope::CurrentSection || !self.browse_end_reached)
         {
             content = content
                 .push(button(text("Load 80 more").size(13)).on_press(Message::BrowseLoadMore));
@@ -396,12 +381,8 @@ impl App {
             .into()
     }
 
-    // ── Library view ───────────────────────────────────────────────
-
     fn view_library(&self) -> Element<'_, Message> {
         let library_busy = self.lingq_uploading;
-
-        // Filter bar
         let search_input = text_input("Search...", &self.library_search)
             .on_input(Message::LibrarySearchChanged)
             .width(220);
@@ -539,11 +520,9 @@ impl App {
             );
         }
 
-        // Get filtered articles using the cached method (we call the mutable version via a workaround)
         let display_articles = self.get_display_library_articles();
         let filtered_count = display_articles.len();
 
-        // Selection / action bar with LingQ course inline
         let upload_sel_count = self.lingq_selected_articles.len();
         let mut action_row = Row::new().spacing(8).align_y(iced::Alignment::Center);
         action_row = action_row.push(
@@ -572,13 +551,11 @@ impl App {
             );
         }
         action_row = action_row.push(horizontal_space());
-        // Inline LingQ course picker
         if self.lingq_connected {
             action_row = action_row.push(self.view_lingq_panel());
         }
         content = content.push(action_row);
 
-        // Upload progress
         if let Some(progress) = &self.upload_progress {
             let fraction = if progress.total == 0 {
                 0.0
@@ -601,33 +578,31 @@ impl App {
             );
         }
 
-        // Paging
-        if let Some(page) = &self.library_page_cache {
-            if page.total_count > page.limit {
-                let current_page = (page.offset / page.limit.max(1)) + 1;
-                let total_pages = page.total_count.div_ceil(page.limit.max(1));
-                let mut paging_row = Row::new().spacing(8).align_y(iced::Alignment::Center);
-                paging_row =
-                    paging_row.push(text(format!("Page {current_page} of {total_pages}")).size(13));
-                if self.library_page_index > 0 {
-                    paging_row = paging_row.push(
-                        button(text("Previous").size(12))
-                            .style(button::secondary)
-                            .on_press(Message::LibraryPrevPage),
-                    );
-                }
-                if current_page < total_pages {
-                    paging_row = paging_row.push(
-                        button(text("Next").size(12))
-                            .style(button::secondary)
-                            .on_press(Message::LibraryNextPage),
-                    );
-                }
-                content = content.push(paging_row);
+        if let Some(page) = &self.library_page_cache
+            && page.total_count > page.limit
+        {
+            let current_page = (page.offset / page.limit.max(1)) + 1;
+            let total_pages = page.total_count.div_ceil(page.limit.max(1));
+            let mut paging_row = Row::new().spacing(8).align_y(iced::Alignment::Center);
+            paging_row =
+                paging_row.push(text(format!("Page {current_page} of {total_pages}")).size(13));
+            if self.library_page_index > 0 {
+                paging_row = paging_row.push(
+                    button(text("Previous").size(12))
+                        .style(button::secondary)
+                        .on_press(Message::LibraryPrevPage),
+                );
             }
+            if current_page < total_pages {
+                paging_row = paging_row.push(
+                    button(text("Next").size(12))
+                        .style(button::secondary)
+                        .on_press(Message::LibraryNextPage),
+                );
+            }
+            content = content.push(paging_row);
         }
 
-        // Article list
         let mut article_list = Column::new().spacing(4);
 
         if self.library_group_by_topic {
@@ -637,7 +612,7 @@ impl App {
                 if topic != current_topic {
                     current_topic = topic.clone();
                     article_list = article_list.push(Space::with_height(6));
-                    article_list = article_list.push(text(format!("{current_topic}")).size(16));
+                    article_list = article_list.push(text(current_topic.to_string()).size(16));
                 }
                 article_list = article_list.push(self.view_library_card(article, library_busy));
             }
@@ -652,7 +627,6 @@ impl App {
         content.into()
     }
 
-    /// Read-only view of filtered library articles using current state.
     fn get_display_library_articles(&self) -> Vec<ArticleListItem> {
         if let Some(page) = &self.library_page_cache {
             return page.items.clone();
@@ -776,14 +750,11 @@ impl App {
             .into()
     }
 
-    // ── LingQ upload panel ─────────────────────────────────────────
-
     fn view_lingq_panel(&self) -> Element<'_, Message> {
         if !self.lingq_connected {
             return Space::with_height(0).into();
         }
 
-        // Build label-to-id mapping for the collection pick list
         let mut label_to_id: std::collections::HashMap<String, i64> =
             std::collections::HashMap::new();
         let collection_options: Vec<String> = std::iter::once("Standalone lesson".to_owned())
@@ -818,7 +789,6 @@ impl App {
         )
         .width(260);
 
-        // Single row: Course picker + refresh + upload controls
         let mut panel_row = Row::new().spacing(8).align_y(iced::Alignment::Center);
         panel_row = panel_row.push(text("Course").size(13));
         panel_row = panel_row.push(collection_pick);
@@ -844,8 +814,6 @@ impl App {
 
         panel_row.into()
     }
-
-    // ── Article detail view ────────────────────────────────────────
 
     fn view_article(&self) -> Element<'_, Message> {
         let Some(article) = &self.article_detail else {
@@ -889,7 +857,6 @@ impl App {
         header = header.push(meta_row);
         header = header.push(horizontal_rule(1));
 
-        // Body text
         let mut body = Column::new().spacing(8);
         for block in article.body_text.split("\n\n") {
             if let Some(heading) = block.strip_prefix("## ") {
@@ -922,8 +889,6 @@ impl App {
         .height(Length::Fill)
         .into()
     }
-
-    // ── Preview drawer ─────────────────────────────────────────────
 
     fn view_preview_drawer(&self) -> Element<'_, Message> {
         let mut col = Column::new().spacing(8).padding(16).width(400);
@@ -1011,7 +976,6 @@ impl App {
         col = col.push(text("Quick preview").size(14));
         col = col.push(text(preview_excerpt(&article.body_text, 2, 900)).size(13));
 
-        // Full text in scrollable
         let mut body = Column::new().spacing(6);
         for block in article.body_text.split("\n\n") {
             if let Some(heading) = block.strip_prefix("## ") {
@@ -1035,8 +999,6 @@ impl App {
             })
             .into()
     }
-
-    // ── Diagnostics view ───────────────────────────────────────────
 
     fn view_diagnostics(&self) -> Element<'_, Message> {
         let data_dir = app_paths::data_dir().ok();
@@ -1152,13 +1114,8 @@ impl App {
                 ..Default::default()
             });
 
-        // Jobs panel
         let jobs_panel = self.view_jobs_panel();
-
-        // Failures panel
         let failures_panel = self.view_failures_panel();
-
-        // Recent log
         let log_panel = self.view_log_panel();
 
         let mut content = Column::new().spacing(10).padding(16).width(Length::Fill);
@@ -1175,7 +1132,6 @@ impl App {
         let mut col = Column::new().spacing(6);
         col = col.push(text("Jobs").size(15));
 
-        // Active job
         if let Some(job) = &self.active_job {
             let fraction = if job.total == 0 {
                 0.0
@@ -1201,7 +1157,6 @@ impl App {
             col = col.push(text("No active job.").size(12).color(TEXT_DIM));
         }
 
-        // Queue controls
         let mut queue_row = Row::new().spacing(6);
         queue_row = queue_row.push(
             text(format!("{} queued", self.queued_jobs.len()))
@@ -1235,7 +1190,6 @@ impl App {
         }
         col = col.push(queue_row);
 
-        // Completed jobs
         col = col.push(Space::with_height(4));
         col = col.push(text("History").size(14));
         for job in self.completed_jobs.iter().take(10) {
@@ -1343,7 +1297,6 @@ impl App {
             );
         }
 
-        // Task failures
         if !self.recent_task_failures.is_empty() {
             col = col.push(Space::with_height(4));
             col = col.push(
@@ -1407,8 +1360,6 @@ impl App {
             .into()
     }
 
-    // ── LingQ settings (modal-like view) ───────────────────────────
-
     fn view_lingq_settings(&self) -> Element<'_, Message> {
         let mut col = Column::new().spacing(12).padding(24).width(Length::Fill);
 
@@ -1429,7 +1380,6 @@ impl App {
                 .color(TEXT_SECONDARY),
         );
 
-        // Auth mode tabs
         let account_btn = if self.lingq_auth_mode == LingqAuthMode::Account {
             button(text("Account Login").size(13)).style(button::primary)
         } else {
@@ -1476,7 +1426,6 @@ impl App {
             );
         }
 
-        // Token input (always shown)
         let token_input = text_input("API key / token", &self.lingq_api_key)
             .on_input(Message::LingqApiKeyChanged)
             .secure(true)
@@ -1502,7 +1451,6 @@ impl App {
                 .color(TEXT_DIM),
         );
 
-        // Connection status
         let status_row = row![
             text(if self.lingq_connected {
                 "Status: Connected"
@@ -1526,8 +1474,6 @@ impl App {
         col.into()
     }
 }
-
-// ── Reusable view helpers ──────────────────────────────────────────
 
 fn sidebar_stat(label: &str, value: i64) -> Element<'_, Message> {
     row![

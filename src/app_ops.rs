@@ -1,6 +1,6 @@
 use crate::{
     context::AppContext,
-    domain::{ArticleListItem, ArticleListPage, LibraryPageRequest, LibraryQuery},
+    domain::{ArticleListPage, LibraryPageRequest, LibraryQuery},
     repositories::ArticleRepository,
     services::ContentRefreshResult,
     soziopolis,
@@ -9,16 +9,6 @@ use anyhow::Result;
 
 pub fn refresh_content(ctx: &AppContext) -> Result<ContentRefreshResult> {
     Ok(crate::services::LibraryService::refresh_content(ctx))
-}
-
-pub fn search_library_cards(
-    ctx: &AppContext,
-    query: &LibraryQuery,
-) -> Result<Vec<ArticleListItem>> {
-    ctx.db.with_db(|db| {
-        let repository = ArticleRepository::new(db);
-        repository.list_article_cards(query)
-    })
 }
 
 pub fn list_library_page(

@@ -1,13 +1,13 @@
 # Release Checklist
 
-This is the release checklist for Soziopolis Reader.
+Use this checklist before publishing a Windows release of Soziopolis Reader.
 
 ## Before tagging
 
 1. Update `Cargo.toml` version.
 2. Update `CHANGELOG.md`.
 3. Review `README.md` for any installer, GUI workflow, or storage changes.
-4. Make sure GitHub repo metadata still matches the product name and release story.
+4. Make sure the GitHub repo name, description, and topics still match the product.
 
 ## Local verification
 
@@ -41,7 +41,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-portable.ps1 -NoDesktop
 2. Create or update the GitHub release for `v<version>`.
 3. Upload `SoziopolisReaderSetup-<version>.exe`.
 4. Make sure the release title uses `Soziopolis Reader <version>`.
-5. Add notes that summarize the real user-facing changes.
+5. Write release notes that describe the user-facing changes plainly.
 
 ## Final GitHub polish
 
@@ -55,4 +55,4 @@ Check the public repository page:
 
 ## Known intentional naming mismatch
 
-The packaged app is `Soziopolis Reader`, but the internal storage path and Cargo package still use `soziopolis_lingq_tool` for upgrade compatibility. Keep that unless you are intentionally doing a migration.
+The packaged app is `Soziopolis Reader`, but the internal storage path and Cargo package still use `soziopolis_lingq_tool` for upgrade compatibility. Keep that unless you are intentionally migrating existing installs.

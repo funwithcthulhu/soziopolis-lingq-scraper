@@ -70,11 +70,11 @@ fn write_line(level: &str, message: &str) {
     let timestamp = timestamp_string();
     let line = format!("[{timestamp}] [{level}] {}\n", sanitize_message(message));
 
-    if let Some(file) = LOG_FILE.get() {
-        if let Ok(mut guard) = file.lock() {
-            let _ = guard.write_all(line.as_bytes());
-            let _ = guard.flush();
-        }
+    if let Some(file) = LOG_FILE.get()
+        && let Ok(mut guard) = file.lock()
+    {
+        let _ = guard.write_all(line.as_bytes());
+        let _ = guard.flush();
     }
 }
 
