@@ -2,28 +2,28 @@
 
 Personal Rust desktop tool for saving Soziopolis articles locally and managing LingQ import workflows.
 
-This repo is a personal utility/tooling experiment, not a polished general-purpose app. It works around my own Soziopolis -> LingQ workflow and is only packaged enough to be convenient to rerun.
+I built this for my own Soziopolis -> LingQ workflow. It works for me, and I have not tried to make it into a general-purpose app.
 
-It is GUI-only: browsing, importing, review, diagnostics, and LingQ uploads all happen inside the desktop app.
+There is no CLI path here. Browsing, importing, review, diagnostics, and LingQ uploads all happen in the GUI.
 
-## What It Does
+## What It Currently Does
 
 - Browse Soziopolis sections and paginate through article listings
 - Extract clean article text from individual pages
 - Keep a searchable local SQLite library with filters, preview, and stats
 - Upload saved articles to LingQ with stored credentials and collection selection
 - Retry failed imports/uploads and manage a persisted job queue
-- Build a portable folder or a basic Windows installer
-- Generate diagnostics bundles with logs, settings, database files, and queue snapshots
+- Build a portable folder or a Windows installer
+- Write support bundles with logs, settings, database files, and queue snapshots
 
-## Download
+## Windows Build
 
-If you want to try the packaged build instead of compiling it yourself:
+If you want to try the packaged build instead of compiling it:
 
 - Releases: <https://github.com/funwithcthulhu/soziopolis-reader/releases>
 - Latest installer: <https://github.com/funwithcthulhu/soziopolis-reader/releases/latest>
 
-## Basic Flow
+## Rough Workflow
 
 ### Install from GitHub Releases
 
@@ -106,7 +106,7 @@ On a new PC, LingQ usually needs to be reconnected once because the token lives 
 
 ### Installer build
 
-To build the simple Windows installer, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
+To build the installer, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1

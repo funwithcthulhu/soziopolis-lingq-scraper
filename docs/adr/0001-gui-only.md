@@ -1,4 +1,4 @@
-# ADR 0001: GUI-Only Tool Surface
+# ADR 0001: GUI-Only Repo
 
 ## Status
 
@@ -6,15 +6,15 @@ Accepted
 
 ## Context
 
-The repository used to have some CLI-shaped leftovers and names that suggested a dual CLI/desktop app. In practice, the product is packaged, tested, and used as a desktop app only.
+The repository used to have some CLI-shaped leftovers and names that suggested a dual CLI/desktop app. In practice, it is built, tested, and used as a desktop app only.
 
 ## Decision
 
-The supported tool surface is GUI-only.
+The repo is GUI-only.
 
 That means:
 
-- there is no supported CLI workflow
+- there is no CLI workflow
 - documentation should describe the desktop app first
 - internal naming should avoid `commands` or other CLI framing when the code is really app-layer logic
 
@@ -22,4 +22,4 @@ That means:
 
 - README and release docs stay focused on install, run, and use as a desktop application
 - app-facing internal operations live behind GUI-neutral names such as `app_ops`
-- dead or misleading CLI-facing paths should be removed rather than kept as half-supported escape hatches
+- dead or misleading CLI-facing paths should be removed instead of lingering around

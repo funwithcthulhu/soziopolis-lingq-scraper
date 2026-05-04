@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-The app does network scraping, imports, refreshes, and uploads that should not block the GUI thread. At the same time, the codebase does not need a larger async runtime everywhere.
+The tool does network scraping, imports, refreshes, and uploads that should not block the GUI thread. At the same time, the codebase does not need a larger async runtime everywhere.
 
 ## Decision
 

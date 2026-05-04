@@ -2,7 +2,7 @@
 
 This tool depends on the network, writes local state, and runs long jobs from a GUI. The main reliability concerns are failed requests, corrupted local state, and background-task crashes.
 
-## Safeguards in the current build
+## Current Safeguards
 
 ### Panic-safe background tasks
 
@@ -74,7 +74,7 @@ Performance counters currently expose:
 - average library page query time
 - average content refresh time
 
-## Known tradeoffs
+## Tradeoffs
 
 - the shared DB handle is still a mutex-guarded database facade, not a dedicated DB worker
 - queue payload tables are still JSON blobs rather than normalized relational tables

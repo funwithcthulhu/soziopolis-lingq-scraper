@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-The app is a single-user Windows desktop tool. It needs structured local persistence, text search, portability, and support bundles that are easy to inspect.
+This is a single-user Windows desktop tool. It needs structured local persistence, text search, portability, and support bundles that are easy to inspect.
 
 ## Decision
 

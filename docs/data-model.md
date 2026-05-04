@@ -1,6 +1,6 @@
 # Data Model
 
-Soziopolis Reader stores its working state in a local SQLite database.
+The tool stores its working state in a local SQLite database.
 
 ## Core table: `articles`
 

@@ -1,6 +1,6 @@
 # Release Checklist
 
-Use this checklist before publishing a Windows build of Soziopolis Reader.
+Use this checklist before publishing a Windows build of this repo.
 
 ## Before tagging
 
@@ -41,13 +41,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-portable.ps1 -NoDesktop
 2. Create or update the GitHub release for `v<version>`.
 3. Upload `SoziopolisReaderSetup-<version>.exe`.
 4. Make sure the release title uses `Soziopolis Reader <version>`.
-5. Write release notes that describe the changes plainly.
+5. Keep the release notes plain and specific.
 
 ## Final GitHub polish
 
-Check the public repository page:
+Check the GitHub repo page:
 
-- repository name matches the tool
+- repository name still fits the tool
 - description explains Soziopolis + LingQ clearly
 - topics are present
 - release link works

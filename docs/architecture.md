@@ -88,9 +88,9 @@ The app uses blocking worker tasks for:
 
 `src/gui/tasks.rs` wraps those tasks with panic capture so worker crashes become `AppError::Internal` instead of taking the GUI down.
 
-## Likely future cleanup
+## Loose Ends
 
-If this tool keeps growing, the next cleanup steps are:
+If I keep adding to this tool, the next cleanup steps are:
 
 - splitting `src/services.rs` into browse/import/library/LingQ submodules
 - splitting `src/database.rs` into article-query and job-persistence submodules
