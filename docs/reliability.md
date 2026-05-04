@@ -1,6 +1,6 @@
 # Reliability
 
-This app depends on the network, writes local state, and runs long jobs from a GUI. The main reliability concerns are failed requests, corrupted local state, and background-task crashes.
+This tool depends on the network, writes local state, and runs long jobs from a GUI. The main reliability concerns are failed requests, corrupted local state, and background-task crashes.
 
 ## Safeguards in the current build
 
@@ -43,7 +43,7 @@ The app uses:
 - `foreign_keys = ON`
 - `busy_timeout = 5s`
 
-Those settings keep the app responsive without giving up sensible durability for a single-user desktop app.
+Those settings keep the tool responsive without giving up sensible durability for a single-user desktop workflow.
 
 ### One-time backfills
 
@@ -80,4 +80,4 @@ Performance counters currently expose:
 - queue payload tables are still JSON blobs rather than normalized relational tables
 - some library rendering still has an in-memory fallback path when no page cache is ready
 
-Those are reasonable tradeoffs for the current size of the app, but they are the first places to revisit if it grows.
+Those are reasonable tradeoffs for a personal desktop tool, but they are the first places to revisit if it grows.

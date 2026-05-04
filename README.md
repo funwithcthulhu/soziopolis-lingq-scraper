@@ -1,27 +1,29 @@
 # Soziopolis Reader
 
-Soziopolis Reader is a Rust desktop app for Windows. It browses articles from `soziopolis.de`, saves them in a local SQLite library, and uploads selected articles to LingQ.
+Personal Rust desktop tool for saving Soziopolis articles locally and managing LingQ import workflows.
 
-It is intentionally GUI-first and GUI-only: browsing, importing, review, diagnostics, and LingQ uploads all happen inside the desktop app.
+This repo is a personal utility/tooling experiment, not a polished general-purpose app. It works around my own Soziopolis -> LingQ workflow and is only packaged enough to be convenient to rerun.
 
-## Highlights
+It is GUI-only: browsing, importing, review, diagnostics, and LingQ uploads all happen inside the desktop app.
+
+## What It Does
 
 - Browse Soziopolis sections and paginate through article listings
 - Extract clean article text from individual pages
 - Keep a searchable local SQLite library with filters, preview, and stats
 - Upload saved articles to LingQ with stored credentials and collection selection
 - Retry failed imports/uploads and manage a persisted job queue
-- Build a portable folder or a normal Windows installer
+- Build a portable folder or a basic Windows installer
 - Generate diagnostics bundles with logs, settings, database files, and queue snapshots
 
 ## Download
 
-The latest Windows build is published on GitHub:
+If you want to try the packaged build instead of compiling it yourself:
 
 - Releases: <https://github.com/funwithcthulhu/soziopolis-reader/releases>
 - Latest installer: <https://github.com/funwithcthulhu/soziopolis-reader/releases/latest>
 
-## Quick Start
+## Basic Flow
 
 ### Install from GitHub Releases
 
@@ -30,7 +32,7 @@ The latest Windows build is published on GitHub:
 3. Run the installer.
 4. Launch `Soziopolis Reader` from Start Menu or the desktop shortcut if you enabled it.
 
-### First-run flow
+### First run
 
 1. Open `Browse Articles`.
 2. Choose a Soziopolis section and load articles.
@@ -38,7 +40,7 @@ The latest Windows build is published on GitHub:
 4. Open `LingQ Settings` and connect your LingQ account or token.
 5. Go to `My Library`, choose a LingQ collection, select saved articles, and upload them.
 
-The local SQLite library keeps imported articles around, so you can preview, filter, and upload them later without fetching them again.
+Once an article is imported, it stays in the local SQLite library so it can be previewed, filtered, or uploaded later without fetching it again.
 
 ## Build From Source
 
@@ -62,13 +64,13 @@ rustc --version
 cargo --version
 ```
 
-### 3. Run the desktop app
+### 3. Run the tool
 
 ```powershell
 cargo run
 ```
 
-This starts the desktop app.
+This starts the GUI.
 
 ### 4. Build an optimized executable
 
@@ -104,7 +106,7 @@ On a new PC, LingQ usually needs to be reconnected once because the token lives 
 
 ### Installer build
 
-To build a normal Windows installer, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
+To build the simple Windows installer, install [Inno Setup 6](https://jrsoftware.org/isinfo.php) and run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1
@@ -153,11 +155,12 @@ The internal storage folder keeps the historical `soziopolis_lingq_tool` name so
 
 If you want the app and its data in a custom location, use the portable layout instead of the default `%LOCALAPPDATA%` location.
 
-## Scope and Assumptions
+## Limits and Assumptions
 
-- The app is packaged and tested as a Windows desktop application.
+- This is packaged and tested as a Windows desktop tool.
 - The scraper is tuned for Soziopolis article pages and section listings as they existed on April 16, 2026.
-- If the Soziopolis site layout changes, the scraping selectors may need an update.
+- If Soziopolis changes its markup, the scraping selectors may need an update.
+- If LingQ changes its API behavior, the import/upload flow may need an update too.
 
 Additional project docs:
 

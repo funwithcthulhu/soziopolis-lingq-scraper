@@ -1,4 +1,4 @@
-# ADR 0001: GUI-Only Product Surface
+# ADR 0001: GUI-Only Tool Surface
 
 ## Status
 
@@ -10,7 +10,7 @@ The repository used to have some CLI-shaped leftovers and names that suggested a
 
 ## Decision
 
-The supported product surface is GUI-only.
+The supported tool surface is GUI-only.
 
 That means:
 

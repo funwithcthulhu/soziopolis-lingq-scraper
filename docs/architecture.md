@@ -1,6 +1,6 @@
 # Architecture
 
-Soziopolis Reader is a Windows desktop app written in Rust. `iced` handles the GUI, SQLite stores local data, and blocking worker tasks handle scraping, imports, refreshes, and LingQ uploads.
+This repo is a small Windows desktop tool written in Rust. `iced` handles the GUI, SQLite stores local data, and blocking worker tasks handle scraping, imports, refreshes, and LingQ uploads.
 
 ## Code layout
 
@@ -90,7 +90,7 @@ The app uses blocking worker tasks for:
 
 ## Likely future cleanup
 
-If the app grows further, the next cleanup steps are:
+If this tool keeps growing, the next cleanup steps are:
 
 - splitting `src/services.rs` into browse/import/library/LingQ submodules
 - splitting `src/database.rs` into article-query and job-persistence submodules
